@@ -140,7 +140,7 @@ If you are building a peer to peer network, you must use the injected way. This 
 
 ![image](/images/quic_structure_injected.svg)
 
-This also means both `QUICClient` and `QUICServer` must share the same connection map.  In order to allow the `QUICSocket` to dispatch data into the correct connection, the connection map is constructed in the `QUICSocket`, however setting and unsetting connections is managed by `QUICClient` and `QUICServer`.
+This also means both `QUICClient` and `QUICServer` must share the same connection map. In order to allow the `QUICSocket` to dispatch data into the correct connection, the connection map is constructed in the `QUICSocket`, however setting and unsetting connections is managed by `QUICClient` and `QUICServer`.
 
 ### Dataflow
 
@@ -174,10 +174,9 @@ External events may also trigger event handlers that will call methods which per
 
 Keeping track of how the system works is therefore quite complex and must follow a set of rules.
 
-* Pull methods - these are either synchronous or asynchronous methods that may throw exceptions.
-* Push handlers - these are event handlers that can initiate pull methods, if these pull handlers throw exceptions, these exceptions must be caught, and expected runtime exceptions are to be converted to error events, all other exceptions will be considered to be software bugs and will be bubbled up to the program boundary as unhandled exceptions or unhandled promise rejections. Generally the only exceptions that are expected runtime exceptions are those that arise from perform IO with the operating system.
+- Pull methods - these are either synchronous or asynchronous methods that may throw exceptions.
+- Push handlers - these are event handlers that can initiate pull methods, if these pull handlers throw exceptions, these exceptions must be caught, and expected runtime exceptions are to be converted to error events, all other exceptions will be considered to be software bugs and will be bubbled up to the program boundary as unhandled exceptions or unhandled promise rejections. Generally the only exceptions that are expected runtime exceptions are those that arise from perform IO with the operating system.
 
 ## License
 
 js-quic is licensed under Apache-2.0, you may read the terms of the license [here](LICENSE).
-

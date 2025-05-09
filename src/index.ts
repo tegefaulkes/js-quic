@@ -9,4 +9,4 @@ export * as utils from './utils.js';
 export * as events from './events.js';
 export * as errors from './errors.js';
 export * as native from './native/index.js';
-export * from './types.js';
+export type * from './types.js';
