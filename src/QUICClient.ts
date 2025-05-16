@@ -141,12 +141,13 @@ class QUICClient {
     await crypto.ops.randomBytes(scidBuffer);
     const scid = new QUICConnectionId(scidBuffer);
     // Validating host and port types
-    let [host_, udpType] = await utils.resolveHost(host, resolveHostname);
+    const [tmpHost, udpType] = await utils.resolveHost(host, resolveHostname);
     const port_ = utils.toPort(port);
     // If the target host is in fact a zero IP, it cannot be used
     // as a target host, so we need to resolve it to a non-zero IP
     // in this case, 0.0.0.0 is resolved to 127.0.0.1 and :: and ::0 is
     // resolved to ::1.
+    let host_ = tmpHost;
     host_ = utils.resolvesZeroIP(host_);
     let isSocketShared: boolean;
     if (socket == null) {
