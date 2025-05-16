@@ -577,7 +577,7 @@ class QUICStream implements ReadableWritablePair<Uint8Array, Uint8Array> {
       this.rejectReadableP = rejectReadableP;
       try {
         await readableP;
-      } catch (e) {
+      } catch {
         // If readableP was rejected then we just want to end early here,
         // anything rejecting it should already have errored the stream.
         return;

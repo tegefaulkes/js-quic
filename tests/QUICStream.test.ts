@@ -12,7 +12,7 @@ import * as utils from '#utils.js';
 import QUICServer from '#QUICServer.js';
 import QUICClient from '#QUICClient.js';
 import QUICStream from '#QUICStream.js';
-1;
+
 describe(QUICStream.name, () => {
   const logger = new Logger(`${QUICStream.name} Test`, LogLevel.WARN, [
     new StreamHandler(
