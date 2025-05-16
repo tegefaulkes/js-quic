@@ -396,7 +396,11 @@ class QUICSocket {
       );
     }
     const host = params[index] as Host | Hostname;
-    let [host_, udpType] = await utils.resolveHost(host, this.resolveHostname);
+    const [tmpHost, udpType] = await utils.resolveHost(
+      host,
+      this.resolveHostname,
+    );
+    let host_ = tmpHost;
     host_ = utils.resolvesZeroIP(host_);
     host_ = utils.validateTarget(
       this._host,
