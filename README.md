@@ -224,6 +224,19 @@ a set of rules.
   Generally the only exceptions that are expected runtime exceptions are those
   that arise from perform IO with the operating system.
 
+### Running without nix
+This assumes you are running linux.
+To run outside nix setting up the enviroment, you need to install the following.
+
+1. Use NVM to install node version 20.
+2. Install the following native libraries
+   - rustup
+   - cmake
+   - gcc
+   - clang
+3. Switch the rust version to `1.77.1`
+4. Now you should be able to install, build and run tests.
+
 ## License
 
 js-quic is licensed under Apache-2.0, you may read the terms of the license
