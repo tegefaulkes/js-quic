@@ -14,8 +14,8 @@ import dns from 'dns';
 import events from 'node:events';
 import { IPv4, IPv6, Validator } from 'ip-num';
 import { firstValueFrom, Subject, takeUntil } from 'rxjs';
-import * as errors from './errors.js';
 import QUICConnectionId from './QUICConnectionId.js';
+import * as errors from './errors.js';
 
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder('utf-8');

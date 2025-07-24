@@ -1,5 +1,6 @@
 import type QUICConnection from './QUICConnection.js';
 import QUICConnectionId from './QUICConnectionId.js';
+import { ConnectionType } from './types.js';
 
 class QUICConnectionMap implements Map<QUICConnectionId, QUICConnection> {
   public [Symbol.toStringTag]: string = 'QUICConnectionMap';
@@ -53,9 +54,9 @@ class QUICConnectionMap implements Map<QUICConnectionId, QUICConnection> {
   }
 
   public set(connectionId: QUICConnectionId, connection: QUICConnection): this {
-    if (connection.type === 'server') {
+    if (connection.type === ConnectionType.SERVER) {
       this._serverConnections.set(connectionId.toString(), connection);
-    } else if (connection.type === 'client') {
+    } else if (connection.type === ConnectionType.CLIENT) {
       this._clientConnections.set(connectionId.toString(), connection);
     }
     return this;
@@ -82,10 +83,10 @@ class QUICConnectionMap implements Map<QUICConnectionId, QUICConnection> {
     thisArg?: any,
   ): void {
     this._serverConnections.forEach((value, key) => {
-      callback.bind(thisArg)(value, QUICConnectionId.fromString(key), this);
+      callback.bind(thisArg)(value, key, this);
     });
     this._clientConnections.forEach((value, key) => {
-      callback.bind(thisArg)(value, QUICConnectionId.fromString(key), this);
+      callback.bind(thisArg)(value, key, this);
     });
   }
 
