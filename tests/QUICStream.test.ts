@@ -4,6 +4,7 @@ import type QUICConnection from '#QUICConnection.js';
 import Logger, { formatting, LogLevel, StreamHandler } from '@matrixai/logger';
 import { test } from '@fast-check/jest';
 import { firstValueFrom } from 'rxjs';
+import { sleep } from './utils.js';
 import * as testsUtils from './utils.js';
 import { generateTLSConfig } from './utils.js';
 import QUICServer from '#QUICServer.js';
@@ -345,14 +346,327 @@ describe('QUICStream', () => {
   });
   // It's not possible to cancel the readable stream before data is sent
   //  because we need data to be sent to create the stream in the first place.
-  test.todo(
-    'should handle readable stream cancel while data blocked',
-    async () => {},
-  );
+
   // TODO: add obervables for data being block or waiting;
 
   test.todo('shutting down client should clean up streams');
   test.todo('shutting down server should clean up streams');
+
+  describe('stream completion tests', () => {
+    // Here we have a bunch of ways the forward and reverse streams can end. They can end gracefully
+    //  with a writable close. Alternatively, the streams can be errored with a writable abort or a
+    //  readable cancel. We need to test each combination of this. The 3 cases are
+    //  - writable close (WC)
+    //  - writable abort (WA)
+    //  - readable cancel (RC)
+
+    // Testing a single stream completion
+    test('should complete with FWC', async () => {
+      const serverStreamP = firstValueFrom(serverConnection.stream$);
+      const clientStream = clientConnection.newStream();
+      const clientWriter = clientStream.writable.getWriter();
+      // Writing a message should trigger the stream creation on the server side.
+      await clientWriter.write(Buffer.from('message'));
+      await clientWriter.close();
+      const serverStream = await serverStreamP;
+      const readP = (async () => {
+        for await (const _chunk of serverStream.readable) {
+          // Consume stream data
+        }
+      })();
+      await firstValueFrom(clientStream.writableComplete$);
+      await firstValueFrom(serverStream.readableComplete$);
+      await readP;
+    });
+    test('should complete with FWA', async () => {
+      const serverStreamP = firstValueFrom(serverConnection.stream$);
+      const clientStream = clientConnection.newStream();
+      const clientWriter = clientStream.writable.getWriter();
+      // Writing a message should trigger the stream creation on the server side.
+      await clientWriter.write(Buffer.from('message'));
+      await clientWriter.abort(new Error('some error'));
+      const serverStream = await serverStreamP;
+      const readP = (async () => {
+        for await (const _chunk of serverStream.readable) {
+          // Consume stream data
+        }
+      })();
+      await firstValueFrom(clientStream.writableComplete$);
+      await firstValueFrom(serverStream.readableComplete$);
+      // FIXME: check actual error
+      await expect(readP).rejects.toThrow();
+    });
+    test('should complete with FRA', async () => {
+      const serverStreamP = firstValueFrom(serverConnection.stream$);
+      const clientStream = clientConnection.newStream();
+      const clientWriter = clientStream.writable.getWriter();
+      // Writing a message should trigger the stream creation on the server side.
+      await clientWriter.write(Buffer.from('message'));
+      const serverStream = await serverStreamP;
+      const serverReader = serverStream.readable.getReader();
+      const readResult = await serverReader.read();
+      expect(readResult.done).toBeFalse();
+      await serverReader.cancel(new Error('some error'));
+      serverReader.releaseLock();
+
+      await firstValueFrom(serverStream.readableComplete$);
+      await firstValueFrom(clientStream.writableComplete$);
+      // FIXME: check actual error
+      await expect(
+        clientWriter.write(Buffer.from('message')),
+      ).rejects.toThrow();
+      // FIXME: check actual error
+      await expect(consumeReadable(serverStream)).rejects.toThrow();
+    });
+
+    // Testing concurrent stream completion from both ends
+    test('should complete with FWC-FRC', async () => {
+      const serverStreamP = firstValueFrom(serverConnection.stream$);
+      const clientStream = clientConnection.newStream();
+      const clientWriter = clientStream.writable.getWriter();
+      // Writing a message should trigger the stream creation on the server side.
+      await clientWriter.write(Buffer.from('message'));
+      const serverStream = await serverStreamP;
+      const serverReader = serverStream.readable.getReader();
+      const readResult = await serverReader.read();
+      expect(readResult.done).toBeFalse();
+      await Promise.all([
+        serverReader.cancel(new Error('some error')),
+        clientWriter.close(),
+      ]);
+      await firstValueFrom(serverStream.readableComplete$);
+      await firstValueFrom(clientStream.writableComplete$);
+    });
+    test('should complete with FWA-FRC', async () => {
+      const serverStreamP = firstValueFrom(serverConnection.stream$);
+      const clientStream = clientConnection.newStream();
+      const clientWriter = clientStream.writable.getWriter();
+      // Writing a message should trigger the stream creation on the server side.
+      await clientWriter.write(Buffer.from('message'));
+      const serverStream = await serverStreamP;
+      const serverReader = serverStream.readable.getReader();
+      const readResult = await serverReader.read();
+      expect(readResult.done).toBeFalse();
+      await Promise.all([
+        serverReader.cancel(new Error('some error')),
+        clientWriter.abort(new Error('some error')),
+      ]);
+      await firstValueFrom(serverStream.readableComplete$);
+      await firstValueFrom(clientStream.writableComplete$);
+    });
+
+    async function consumeReadable(stream: QUICStream) {
+      for await (const _chunk of stream.readable) {
+        // Do nothing, only consume to completion
+      }
+    }
+
+    // Both forward and reverse streams completing should trigger QUICStream completion
+    test('should fully complete with FWC, RWC', async () => {
+      const serverStreamP = firstValueFrom(serverConnection.stream$);
+      const clientStream = clientConnection.newStream();
+      const clientWriter = clientStream.writable.getWriter();
+      // Writing a message should trigger the stream creation on the server side.
+      await clientWriter.write(Buffer.from('message'));
+      await clientWriter.close();
+      const serverStream = await serverStreamP;
+      const serverWriter = serverStream.writable.getWriter();
+      await serverWriter.write(Buffer.from('message'));
+      await serverWriter.close();
+
+      await consumeReadable(clientStream);
+      await consumeReadable(serverStream);
+
+      await firstValueFrom(clientStream.writableComplete$);
+      await firstValueFrom(clientStream.readableComplete$);
+      await firstValueFrom(serverStream.writableComplete$);
+      await firstValueFrom(serverStream.readableComplete$);
+      await firstValueFrom(serverStream.complete$);
+    });
+
+    test('should fully complete with FWA, RWC', async () => {
+      const serverStreamP = firstValueFrom(serverConnection.stream$);
+      const clientStream = clientConnection.newStream();
+      const clientWriter = clientStream.writable.getWriter();
+      // Writing a message should trigger the stream creation on the server side.
+      await clientWriter.write(Buffer.from('message'));
+      await clientWriter.abort(new Error('some error'));
+      const serverStream = await serverStreamP;
+      const serverWriter = serverStream.writable.getWriter();
+      await serverWriter.write(Buffer.from('message'));
+      await serverWriter.close();
+
+      await consumeReadable(clientStream);
+      // TODO: proper error
+      await expect(consumeReadable(serverStream)).rejects.toThrow();
+
+      await firstValueFrom(clientStream.writableComplete$);
+      await firstValueFrom(clientStream.readableComplete$);
+      await firstValueFrom(serverStream.writableComplete$);
+      await firstValueFrom(serverStream.readableComplete$);
+      await firstValueFrom(serverStream.complete$);
+    });
+
+    test('should fully complete with FWC, RWA', async () => {
+      const serverStreamP = firstValueFrom(serverConnection.stream$);
+      const clientStream = clientConnection.newStream();
+      const clientWriter = clientStream.writable.getWriter();
+      // Writing a message should trigger the stream creation on the server side.
+      await clientWriter.write(Buffer.from('message'));
+      await clientWriter.close();
+      const serverStream = await serverStreamP;
+      const serverWriter = serverStream.writable.getWriter();
+      await serverWriter.write(Buffer.from('message'));
+      await serverWriter.abort(new Error('some error'));
+
+      // TODO: proper error
+      await expect(consumeReadable(clientStream)).rejects.toThrow();
+      await consumeReadable(serverStream);
+
+      await firstValueFrom(clientStream.writableComplete$);
+      await firstValueFrom(clientStream.readableComplete$);
+      await firstValueFrom(serverStream.writableComplete$);
+      await firstValueFrom(serverStream.readableComplete$);
+      await firstValueFrom(serverStream.complete$);
+    });
+    test('should fully complete with FRC, RWC', async () => {
+      const serverStreamP = firstValueFrom(serverConnection.stream$);
+      const clientStream = clientConnection.newStream();
+      const clientWriter = clientStream.writable.getWriter();
+      // Writing a message should trigger the stream creation on the server side.
+      await clientWriter.write(Buffer.from('message'));
+      const serverStream = await serverStreamP;
+      const serverWriter = serverStream.writable.getWriter();
+      await serverWriter.write(Buffer.from('message'));
+      await serverWriter.close();
+      await serverStream.readable.cancel(new Error('some error'));
+
+      await consumeReadable(clientStream);
+      await consumeReadable(serverStream);
+
+      await firstValueFrom(clientStream.writableComplete$);
+      await firstValueFrom(clientStream.readableComplete$);
+      await firstValueFrom(serverStream.writableComplete$);
+      await firstValueFrom(serverStream.readableComplete$);
+      await firstValueFrom(serverStream.complete$);
+
+      // TODO: proper errors
+      await expect(
+        clientWriter.write(Buffer.from('message')),
+      ).rejects.toThrow();
+    });
+    test('should fully complete with FWA, RWA', async () => {
+      const serverStreamP = firstValueFrom(serverConnection.stream$);
+      const clientStream = clientConnection.newStream();
+      const clientWriter = clientStream.writable.getWriter();
+      // Writing a message should trigger the stream creation on the server side.
+      await clientWriter.write(Buffer.from('message'));
+      await clientWriter.abort(new Error('some error'));
+      const serverStream = await serverStreamP;
+      const serverWriter = serverStream.writable.getWriter();
+      await serverWriter.write(Buffer.from('message'));
+      await serverWriter.abort(new Error('some error'));
+
+      // TODO: proper error
+      await expect(consumeReadable(clientStream)).rejects.toThrow();
+      // TODO: proper error
+      await expect(consumeReadable(serverStream)).rejects.toThrow();
+
+      await firstValueFrom(clientStream.writableComplete$);
+      await firstValueFrom(clientStream.readableComplete$);
+      await firstValueFrom(serverStream.writableComplete$);
+      await firstValueFrom(serverStream.readableComplete$);
+      await firstValueFrom(serverStream.complete$);
+    });
+    // FIXME: The client readable stream should error since it was cancelled - check webstream behaviour here
+    test('should fully complete with FWC, RRC', async () => {
+      const serverStreamP = firstValueFrom(serverConnection.stream$);
+      const clientStream = clientConnection.newStream();
+      const clientWriter = clientStream.writable.getWriter();
+      // Writing a message should trigger the stream creation on the server side.
+      await clientWriter.write(Buffer.from('message'));
+      await clientWriter.close();
+      const serverStream = await serverStreamP;
+      await clientStream.readable.cancel(new Error('some error'));
+
+      // TODO: proper error
+      await expect(consumeReadable(clientStream)).rejects.toThrow();
+      await consumeReadable(serverStream);
+
+      await firstValueFrom(clientStream.writableComplete$);
+      await firstValueFrom(clientStream.readableComplete$);
+      await firstValueFrom(clientStream.complete$);
+      await firstValueFrom(serverStream.writableComplete$);
+      await firstValueFrom(serverStream.readableComplete$);
+      await firstValueFrom(serverStream.complete$);
+    });
+    test('should fully complete with FRC, RWA', async () => {
+      const serverStreamP = firstValueFrom(serverConnection.stream$);
+      const clientStream = clientConnection.newStream();
+      const clientWriter = clientStream.writable.getWriter();
+      // Writing a message should trigger the stream creation on the server side.
+      await clientWriter.write(Buffer.from('message'));
+      const serverStream = await serverStreamP;
+      await serverStream.readable.cancel(new Error('some error'));
+      await serverStream.writable.abort(new Error('some error'));
+
+      // TODO: proper error
+      await expect(consumeReadable(clientStream)).rejects.toThrow();
+      // TODO: proper error
+      await expect(consumeReadable(serverStream)).rejects.toThrow();
+
+      await firstValueFrom(clientStream.writableComplete$);
+      await firstValueFrom(clientStream.readableComplete$);
+      await firstValueFrom(clientStream.complete$);
+      await firstValueFrom(serverStream.writableComplete$);
+      await firstValueFrom(serverStream.readableComplete$);
+      await firstValueFrom(serverStream.complete$);
+    });
+    test('should fully complete with FWA, RRC', async () => {
+      const serverStreamP = firstValueFrom(serverConnection.stream$);
+      const clientStream = clientConnection.newStream();
+      const clientWriter = clientStream.writable.getWriter();
+      // Writing a message should trigger the stream creation on the server side.
+      await clientWriter.write(Buffer.from('message'));
+      const serverStream = await serverStreamP;
+      await clientWriter.abort(new Error('some error'));
+      await clientStream.readable.cancel(new Error('some error'));
+
+      // TODO: proper error
+      await expect(consumeReadable(clientStream)).rejects.toThrow();
+      // TODO: proper error
+      await expect(consumeReadable(serverStream)).rejects.toThrow();
+
+      await firstValueFrom(clientStream.writableComplete$);
+      await firstValueFrom(clientStream.readableComplete$);
+      await firstValueFrom(clientStream.complete$);
+      await firstValueFrom(serverStream.writableComplete$);
+      await firstValueFrom(serverStream.readableComplete$);
+      await firstValueFrom(serverStream.complete$);
+    });
+    test('should fully complete with FRC, RRC', async () => {
+      const serverStreamP = firstValueFrom(serverConnection.stream$);
+      const clientStream = clientConnection.newStream();
+      const clientWriter = clientStream.writable.getWriter();
+      // Writing a message should trigger the stream creation on the server side.
+      await clientWriter.write(Buffer.from('message'));
+      const serverStream = await serverStreamP;
+      await serverStream.readable.cancel(new Error('some error'));
+      await clientStream.readable.cancel(new Error('some error'));
+
+      // TODO: proper error
+      await expect(consumeReadable(clientStream)).rejects.toThrow();
+      // TODO: proper error
+      await expect(consumeReadable(serverStream)).rejects.toThrow();
+
+      await firstValueFrom(clientStream.writableComplete$);
+      await firstValueFrom(clientStream.readableComplete$);
+      await firstValueFrom(clientStream.complete$);
+      await firstValueFrom(serverStream.writableComplete$);
+      await firstValueFrom(serverStream.readableComplete$);
+      await firstValueFrom(serverStream.complete$);
+    });
+  });
 
   // Test('destroying stream should clean up on both ends while streams are used', async () => {
   //   const message = Buffer.from('Message!');

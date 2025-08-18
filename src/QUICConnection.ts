@@ -158,6 +158,7 @@ class QUICConnection {
   //  - After a timeout event when `onTimeout()` is called
   //  - When the application interacts with the streams
   public readonly send$: Subject<SendData> = new Subject();
+  public readonly recvHandled$: Subject<void> = new Subject();
 
   /**
    * Chain of local certificates from leaf to root in DER format.
@@ -311,6 +312,7 @@ class QUICConnection {
         this.error$.next(Error(`TMP IMP Errored from ${e.message}`));
       }
     }
+    this.recvHandled$.next();
     this.processStreams();
     this.processSend();
     if (LOG_STAGES) this.logger.warn(`!----- Processing recv done -----!`);

@@ -5,6 +5,27 @@ import { firstValueFrom, ReplaySubject, Subject } from 'rxjs';
 import * as utils from './utils.js';
 import { Shutdown } from './native/index.js';
 
+export enum StreamState {
+  WritableStart = 0,
+  WritableWriteStart = 1,
+  WritableWriteDone = 2,
+  WritableErrored = 3,
+  WritableBlocked = 4,
+  WritableUnblocked = 5,
+  WritableSentPartial = 6,
+  WritableSentFull = 7,
+  WritableClosed = 8,
+  WritableAborted = 9,
+  ReadableStart = 10,
+  ReadablePullStart = 11,
+  ReadableBlocked = 12,
+  ReadableUnblocked = 13,
+  ReadableRead = 14,
+  ReadableFinished = 15,
+  ReadableCancelled = 16,
+  ReadableErrored = 17,
+}
+
 const CHECK_STATES = true;
 const LOG_COMPLETE_EVENTS = true;
 const LOG_STREAM_STEPS = true;
@@ -20,19 +41,17 @@ class QUICStream {
   protected readableController: ReadableStreamController<Buffer>;
   protected writableController: WritableStreamDefaultController;
 
+  public readonly streamEvents$: Subject<StreamState> = new Subject();
+
   protected writableStart: UnderlyingSinkStartCallback = (controller) => {
-    if (LOG_STREAM_STEPS) this.logger.warn(`start WritableStream ${this.id}`);
+    this.streamEvents$.next(StreamState.WritableStart);
     this.writableController = controller;
   };
   protected writableWrite: UnderlyingSinkWriteCallback<Buffer> = async (
     chunk,
     controller,
   ) => {
-    if (LOG_STREAM_STEPS) {
-      this.logger.warn(
-        `write stream ${this.id} with ${chunk.byteLength} bytes`,
-      );
-    }
+    this.streamEvents$.next(StreamState.WritableWriteStart);
     // Check if capacity matches
     let remaining = chunk;
     while (true) {
@@ -46,43 +65,27 @@ class QUICStream {
           false,
         );
       } catch (e) {
+        this.streamEvents$.next(StreamState.WritableErrored);
         controller.error(e);
         return;
       }
-      if (LOG_STREAM_STEPS) {
-        this.logger.warn(`streamSend ${sentBytes} from stream ${this.id}`);
-      }
       if (sentBytes == null) {
-        if (LOG_STREAM_STEPS) {
-          this.logger.warn(
-            `write null from stream ${this.id} waiting for more capacity`,
-          );
-        }
         // No bytes sent, wait for more capacity
+        this.streamEvents$.next(StreamState.WritableBlocked);
         await firstValueFrom(this.writeReady$);
-        if (LOG_STREAM_STEPS) {
-          this.logger.warn(`done waiting for more capacity ${this.id}`);
-        }
+        this.streamEvents$.next(StreamState.WritableUnblocked);
         continue;
       }
       if (sentBytes < remaining.byteLength) {
         // Partially sent, so we split the buffer
         remaining = remaining.subarray(sentBytes);
-        if (LOG_STREAM_STEPS) {
-          this.logger.warn(
-            `partial send of ${sentBytes} bytes from stream ${this.id} with ${remaining.byteLength} bytes remaining`,
-          );
-        }
+        this.streamEvents$.next(StreamState.WritableSentPartial);
         // Wait for more capacity
         this.connection.processSend();
         continue;
       }
       if (sentBytes >= remaining.byteLength) {
-        if (LOG_STREAM_STEPS) {
-          this.logger.warn(
-            `full send of ${sentBytes} bytes from stream ${this.id}`,
-          );
-        }
+        this.streamEvents$.next(StreamState.WritableSentFull);
         this.connection.processSend();
         // Fully sent so break out and wait for more data
         break;
@@ -90,20 +93,16 @@ class QUICStream {
       // Base case, if nothing happened, then we had some undefined logic
       utils.never('unexpected case happened and potential infinite loop');
     }
-    if (LOG_STREAM_STEPS) {
-      this.logger.warn(`done writing pass for stream ${this.id}`);
-    }
+    this.streamEvents$.next(StreamState.WritableWriteDone);
   };
   protected writableClose: UnderlyingSinkCloseCallback = () => {
-    if (LOG_STREAM_STEPS) this.logger.warn(`close stream ${this.id}`);
+    this.streamEvents$.next(StreamState.WritableClosed);
     this.connection.connection.streamSend(this.id, Buffer.alloc(0), true);
     this.connection.processSend();
     this.updateWritableComplete();
   };
-  protected writableAbort: UnderlyingSinkAbortCallback = (reason) => {
-    if (LOG_STREAM_STEPS) {
-      this.logger.warn(`abort stream ${this.id} with reason ${reason}`);
-    }
+  protected writableAbort: UnderlyingSinkAbortCallback = (_reason) => {
+    this.streamEvents$.next(StreamState.WritableAborted);
     this.connection.connection.streamShutdown(this.id, Shutdown.Write, 42);
     this.writableAborted = true;
     this.writeReady$.next();
@@ -113,51 +112,57 @@ class QUICStream {
   protected readableStart: UnderlyingSourceStartCallback<Buffer> = (
     controller,
   ) => {
-    if (LOG_STREAM_STEPS) this.logger.warn(`start ReadableStream ${this.id}`);
+    this.streamEvents$.next(StreamState.ReadableStart);
     this.readableController = controller;
   };
   protected readablePull: UnderlyingSourcePullCallback<Buffer> = async (
     controller,
   ) => {
-    if (LOG_STREAM_STEPS) this.logger.warn(`pull ReadableStream ${this.id}`);
+    this.streamEvents$.next(StreamState.ReadablePullStart);
     // Attempt to read from the connection
     let chunks = 0;
     while (true) {
       const buffer = Buffer.allocUnsafe(CHUNK_SIZE);
       const result = this.connection.connection.streamRecv(this.id, buffer);
       if (result == null) {
-        if (LOG_STREAM_STEPS) {
-          this.logger.warn(`read null from stream ${this.id}`);
-        }
         // If we enqueued any chunks then we need to wait for the readableStream to drain
         this.checkState();
         if (chunks > 0) break;
         // If no chunks queued then wait for more data
+        this.streamEvents$.next(StreamState.ReadableBlocked);
         await firstValueFrom(this.readReady$);
+        this.streamEvents$.next(StreamState.ReadableUnblocked);
         continue;
       }
       const [bytesRead, finished] = result;
-      if (LOG_STREAM_STEPS) {
-        this.logger.warn(
-          `read ${bytesRead} bytes from stream ${this.id} with finished ${finished}`,
-        );
-      }
+      this.streamEvents$.next(StreamState.ReadableRead);
       if (bytesRead > 0) controller.enqueue(buffer.subarray(0, bytesRead));
       chunks++;
       this.checkState();
       if (finished) {
+        this.streamEvents$.next(StreamState.ReadableFinished);
         controller.close();
         this.updateReadableComplete();
         break;
       }
     }
   };
+
   protected readableCancel: UnderlyingSourceCancelCallback = () => {
-    if (LOG_STREAM_STEPS) this.logger.warn(`cancel ReadableStream ${this.id}`);
+    this.streamEvents$.next(StreamState.ReadableCancelled);
     this.connection.connection.streamShutdown(this.id, Shutdown.Read, 42);
     this.readableCancelled = true;
     this.connection.processSend();
-    this.updateReadableComplete();
+    // Cancelling doesn't immedietly close the readable stream. The state will update once
+    //  the cancellation has been acked and that packet processed. Annoyingly when this happens
+    //  the stream isn't added to the readable iterator. So we need to check each time a
+    //  new packet is received until it finishes.
+    const subscription = this.connection.recvHandled$.subscribe(() => {
+      if (this.isFinished) {
+        subscription.unsubscribe();
+        this.updateReadableComplete();
+      }
+    });
   };
 
   constructor(
@@ -165,6 +170,11 @@ class QUICStream {
     public readonly connection: QUICConnection,
     protected logger: Logger,
   ) {
+    if (LOG_STREAM_STEPS) {
+      this.streamEvents$.subscribe((v) => {
+        this.logger.warn(`stream event ${StreamState[v]}`);
+      });
+    }
     this.writable = new WritableStream<Buffer>({
       start: this.writableStart,
       write: this.writableWrite,
@@ -178,12 +188,33 @@ class QUICStream {
     });
     this.readReady$.subscribe(() => {
       if (CHECK_STATES) this.logger.warn(`read ready ${this.id}`);
+      // If the stream is finished here then it either ended with an error or a 0-len fin packet.
+      // We must do a Recv to work out which is which
       const finished = this.connection.connection.streamFinished(this.id);
       if (finished) {
         this.logger.warn(`finished ${this.id}`);
         // We need to tigger a read and end the readable stream with an error
-        this.readableController.error(new Error('Stream finished'));
-        this.updateReadableComplete();
+        try {
+          const buf = Buffer.alloc(1024);
+          const result = this.connection.connection.streamRecv(this.id, buf);
+          if (result == null) {
+            utils.never('got null result when expecting data');
+          }
+          const [bytesRead, finished] = result;
+          if (!finished || bytesRead > 0) {
+            utils.never('processed data when we just expected a fin frame');
+          }
+          this.streamEvents$.next(StreamState.ReadableFinished);
+          this.readableController.close();
+          this.updateReadableComplete();
+          return;
+        } catch (_e) {
+          // TODO: proper error.
+          this.streamEvents$.next(StreamState.ReadableErrored);
+          this.readableController.error(new Error('Stream finished'));
+          this.updateReadableComplete();
+          return;
+        }
       }
     });
     this.writeReady$.subscribe(() => {
