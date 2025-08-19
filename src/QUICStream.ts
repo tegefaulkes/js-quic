@@ -24,6 +24,7 @@ export enum StreamState {
   ReadableFinished = 15,
   ReadableCancelled = 16,
   ReadableErrored = 17,
+  Killed = 18,
 }
 
 const CHECK_STATES = true;
@@ -207,13 +208,13 @@ class QUICStream {
           this.streamEvents$.next(StreamState.ReadableFinished);
           this.readableController.close();
           this.updateReadableComplete();
-          return;
-        } catch (_e) {
+          // Return;
+        } catch {
           // TODO: proper error.
           this.streamEvents$.next(StreamState.ReadableErrored);
           this.readableController.error(new Error('Stream finished'));
           this.updateReadableComplete();
-          return;
+          // Return;
         }
       }
     });
@@ -343,6 +344,23 @@ class QUICStream {
       this._complete = true;
       this.complete$.next();
       this.complete$.complete();
+    }
+  }
+
+  // TODO: we should only close out the stream if
+  public kill() {
+    this.streamEvents$.next(StreamState.Killed);
+    // TODO: proper error.
+    const error = new Error('Stream killed');
+    // Handle killing the writable stream
+    if (!this._writableComplete) {
+      this.writableController.error(error);
+      this.writableAbort();
+    }
+    // Handle killing the readable stream
+    if (!this._readableComplete) {
+      this.readableController.error(error);
+      this.readableCancel();
     }
   }
 }

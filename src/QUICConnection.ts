@@ -10,16 +10,16 @@ import type {
 } from './types.js';
 import type * as nativeTypes from './native/types.js';
 import type Logger from '@matrixai/logger';
-import { ReplaySubject, Subject } from 'rxjs';
+import { firstValueFrom, ReplaySubject, Subject } from 'rxjs';
+import { CryptoError, quiche, Shutdown } from './native/index.js';
 import { ConnectionType } from './types.js';
-import { CryptoError, quiche } from './native/index.js';
 import { buildQuicheConfig } from './config.js';
 import * as errors from './errors.js';
 import * as utils from './utils.js';
 import QUICConnectionId from './QUICConnectionId.js';
 import QUICStream from './QUICStream.js';
 
-const LOG_STAGES = false;
+const LOG_STAGES = true;
 const LOG_STATE_CHAGES = true;
 
 class QUICConnection {
@@ -169,6 +169,9 @@ class QUICConnection {
    * Array of independent CA certificates in DER format.
    */
   protected caDERs: Array<Uint8Array> = [];
+
+  protected rejectStreams: boolean = false;
+  s;
 
   // Sets everything up
   public constructor(
@@ -510,6 +513,21 @@ class QUICConnection {
     return this.peerCertChain_;
   }
 
+  // TODO: we need some method to end streams
+  public async endStreams(force: boolean): Promise<void> {
+    // Prevent new streams from being created
+    this.rejectStreams = true;
+    // Wait for all streams to end
+    const streams: Array<Promise<void>> = [];
+    for (const [, stream] of this.streamMap) {
+      streams.push(firstValueFrom(stream.complete$));
+
+      // If forced then we need to trigger the stream to end
+      if (force) stream.kill();
+    }
+    await Promise.all(streams);
+  }
+
   public kill({
     isApp,
     errorCode,
@@ -565,26 +583,14 @@ class QUICConnection {
   // and letting the streams know there is data.
   public processStreams(): void {
     if (LOG_STAGES) this.logger.warn(`!----- processStreams -----!`);
-    // Checking readable
-    if (LOG_STAGES) this.logger.warn(`!----- processStreams readables -----!`);
-    for (const streamId of this.connection.readable()) {
-      let quicStream = this.streamMap.get(streamId);
-      if (quicStream == null) {
-        this.logger.warn(`creating new stream for ${streamId} on readable`);
-        quicStream = new QUICStream(
-          streamId,
-          this,
-          this.logger.getChild(`QuicStream_${streamId}`),
-        );
-        this.setupQuicStream(quicStream);
-        this.stream$.next(quicStream);
-      }
-      quicStream.readReady$.next();
-    }
     if (LOG_STAGES) this.logger.warn(`!----- processStreams writables -----!`);
     for (const streamId of this.connection.writable()) {
       let quicStream = this.streamMap.get(streamId);
       if (quicStream == null) {
+        if (this.rejectStreams) {
+          this.rejectStream(streamId);
+          continue;
+        }
         this.logger.warn(`creating new stream for ${streamId} on writable`);
         quicStream = new QUICStream(
           streamId,
@@ -596,13 +602,43 @@ class QUICConnection {
       }
       quicStream.writeReady$.next();
     }
+    if (LOG_STAGES) this.logger.warn(`!----- processStreams readables -----!`);
+    for (const streamId of this.connection.readable()) {
+      let quicStream = this.streamMap.get(streamId);
+      if (quicStream == null) {
+        if (this.rejectStreams) {
+          this.rejectStream(streamId);
+          continue;
+        }
+        this.logger.warn(`creating new stream for ${streamId} on readable`);
+        quicStream = new QUICStream(
+          streamId,
+          this,
+          this.logger.getChild(`QuicStream_${streamId}`),
+        );
+        this.setupQuicStream(quicStream);
+        this.stream$.next(quicStream);
+      }
+      quicStream.readReady$.next();
+    }
     if (LOG_STAGES) this.logger.warn(`!----- processStreams done -----!`);
+  }
+
+  protected rejectStream(streamId: StreamId): void {
+    this.logger.warn(`rejecting stream ${streamId}`);
+    // TODO: use a configured error code
+    this.connection.streamShutdown(streamId, Shutdown.Read, 1);
+    this.connection.streamShutdown(streamId, Shutdown.Write, 1);
   }
 
   /**
    * Creates a new QUIC stream on the connection.
    */
   public newStream(type: 'bidi' | 'uni' = 'bidi'): QUICStream {
+    if (this.rejectStreams) {
+      // FIXME
+      throw Error('TMP IMP Cannot create new stream');
+    }
     let streamId: StreamId;
     if (this.type === ConnectionType.CLIENT && type === 'bidi') {
       streamId = this.streamIdClientBidi;
