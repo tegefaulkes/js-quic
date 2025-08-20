@@ -27,9 +27,6 @@ export enum StreamState {
   Killed = 18,
 }
 
-const CHECK_STATES = false;
-const LOG_COMPLETE_EVENTS = false;
-const LOG_STREAM_STEPS = false;
 const CHUNK_SIZE = 1024;
 
 class QUICStream {
@@ -169,13 +166,7 @@ class QUICStream {
   constructor(
     public readonly id: number,
     public readonly connection: QUICConnection,
-    protected logger: Logger,
   ) {
-    if (LOG_STREAM_STEPS) {
-      this.streamEvents$.subscribe((v) => {
-        this.logger.warn(`stream event ${StreamState[v]}`);
-      });
-    }
     this.writable = new WritableStream<Buffer>({
       start: this.writableStart,
       write: this.writableWrite,
@@ -188,12 +179,10 @@ class QUICStream {
       cancel: this.readableCancel,
     });
     this.readReady$.subscribe(() => {
-      if (CHECK_STATES) this.logger.warn(`read ready ${this.id}`);
       // If the stream is finished here then it either ended with an error or a 0-len fin packet.
       // We must do a Recv to work out which is which
       const finished = this.connection.connection.streamFinished(this.id);
       if (finished) {
-        if (CHECK_STATES) this.logger.warn(`finished ${this.id}`);
         // We need to tigger a read and end the readable stream with an error
         try {
           const buf = Buffer.alloc(1024);
@@ -219,48 +208,13 @@ class QUICStream {
       }
     });
     this.writeReady$.subscribe(() => {
-      if (CHECK_STATES) this.logger.warn(`write ready ${this.id}`);
       try {
         this.connection.connection.streamSend(this.id, Buffer.alloc(0), false);
       } catch (e) {
-        if (CHECK_STATES) {
-          this.logger.error(`writable failed with ${e.message}`);
-        }
         this.writableController.error(e);
         this.updateWritableComplete();
       }
     });
-
-    if (CHECK_STATES) {
-      this.readable$.subscribe(() =>
-        this.logger.warn(`CHANGED readable$ ${this.id}`),
-      );
-    }
-    if (CHECK_STATES) {
-      this.writable$.subscribe(() =>
-        this.logger.warn(`CHANGED writable$ ${this.id}`),
-      );
-    }
-    if (CHECK_STATES) {
-      this.finished$.subscribe(() =>
-        this.logger.warn(`CHANGED finished$ ${this.id}`),
-      );
-    }
-    if (LOG_COMPLETE_EVENTS) {
-      this.readableComplete$.subscribe(() =>
-        this.logger.warn(`CHANGED readableComplete$ ${this.id}`),
-      );
-    }
-    if (LOG_COMPLETE_EVENTS) {
-      this.writableComplete$.subscribe(() =>
-        this.logger.warn(`CHANGED writableComplete$ ${this.id}`),
-      );
-    }
-    if (LOG_COMPLETE_EVENTS) {
-      this.complete$.subscribe(() =>
-        this.logger.warn(`CHANGED complete$ ${this.id}`),
-      );
-    }
   }
 
   protected checkState() {
@@ -364,9 +318,6 @@ class QUICStream {
       this.readableController.error(error);
       this.readableCancel();
       if (this.connection.isDraining || this.connection.isClosed) {
-        this.logger.error(
-          'there will be no more updates so we need to close early.',
-        );
         // TODO: proper error.
         this.streamEvents$.next(StreamState.ReadableErrored);
         this.readableController.error(new Error('Stream finished'));

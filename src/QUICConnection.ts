@@ -595,11 +595,7 @@ class QUICConnection {
         if (LOG_STATE_CHAGES) {
           this.logger.warn(`creating new stream for ${streamId} on writable`);
         }
-        quicStream = new QUICStream(
-          streamId,
-          this,
-          this.logger.getChild(`QuicStream_${streamId}`),
-        );
+        quicStream = new QUICStream(streamId, this);
         this.setupQuicStream(quicStream);
         this.stream$.next(quicStream);
       }
@@ -616,11 +612,7 @@ class QUICConnection {
         if (LOG_STATE_CHAGES) {
           this.logger.warn(`creating new stream for ${streamId} on readable`);
         }
-        quicStream = new QUICStream(
-          streamId,
-          this,
-          this.logger.getChild(`QuicStream_${streamId}`),
-        );
+        quicStream = new QUICStream(streamId, this);
         this.setupQuicStream(quicStream);
         this.stream$.next(quicStream);
       }
@@ -658,11 +650,7 @@ class QUICConnection {
       streamId = this.streamIdServerUni;
       this.streamIdServerUni += this.streamIdStep;
     }
-    const quicStream = new QUICStream(
-      streamId!,
-      this,
-      this.logger.getChild(`QuicStream_${streamId!}`),
-    );
+    const quicStream = new QUICStream(streamId!, this);
     this.setupQuicStream(quicStream);
     const result = this.connection.streamSend(
       quicStream.id,
