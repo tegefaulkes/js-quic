@@ -32,6 +32,9 @@ describe(QUICClient.name, () => {
   const types: Array<KeyTypes> = ['RSA' /* 'ECDSA', 'Ed25519'*/];
   // Const types: Array<KeyTypes> = ['RSA'];
   const defaultType = types[0];
+  const clientCrypto: ClientCryptoOps = {
+    randomBytes: testsUtils.randomBytes,
+  };
 
   // We need to test the stream making
   beforeEach(async () => {
@@ -655,6 +658,37 @@ describe(QUICClient.name, () => {
       await server.stop();
     });
   });
+
+  // FIXME: this needs to be fixed up. Currently not actually handling the error properly when creating the client.
+  test.skip('invalid arguments causes `createQUICClient` to fail', async () => {
+    await QUICClient.createQUICClient({
+      host: '123.123.123.123', // Invalid ip when bound to loopback
+      port: 55555,
+      localHost: localhost,
+      crypto: {
+        ops: clientCrypto,
+      },
+      config: {
+        verifyPeer: false,
+      },
+      logger: logger.getChild(QUICClient.name),
+    });
+    await expect(
+      QUICClient.createQUICClient({
+        host: '123.123.123.123', // Invalid ip when bound to loopback
+        port: 55555,
+        localHost: localhost,
+        crypto: {
+          ops: clientCrypto,
+        },
+        config: {
+          verifyPeer: false,
+        },
+        logger: logger.getChild(QUICClient.name),
+      }),
+    ).rejects.toThrow(errors.ErrorQUICClientInvalidArgument);
+  });
+
 
   // Describe('handles random packets', () => {
   //   test.prop(
