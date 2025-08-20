@@ -23,7 +23,7 @@ describe('QUICStream', () => {
       formatting.format`${formatting.level}:${formatting.keys}:${formatting.msg}`,
     ),
   ]);
-  const loggerClient = new Logger(`QUICClient`, LogLevel.SILENT, [
+  const loggerClient = new Logger(`QUICClient`, LogLevel.WARN, [
     new StreamHandler(
       formatting.format`${formatting.level}:${formatting.keys}:${formatting.msg}`,
     ),
@@ -503,8 +503,7 @@ describe('QUICStream', () => {
     await firstValueFrom(newServerStream.complete$);
   });
 
-  // Fixme: broken test
-  test.skip('shutting down client should clean up streams', async () => {
+  test('calling clientConnection.endStreams should clean up streams', async () => {
     const streams: Array<QUICStream> = [];
     const serverStreamP = firstValueFrom(serverConnection.stream$);
     const clientStream = clientConnection.newStream();
@@ -522,10 +521,106 @@ describe('QUICStream', () => {
     const streamsCloseP = Promise.all(
       streams.map((v) => firstValueFrom(v.complete$)),
     );
-    await client.destroy({ isApp: true, force: false });
+
+    await clientConnection.endStreams(true);
     await streamsCloseP;
+    expect(clientConnection.openStreams).toBe(0);
   });
-  test.todo('shutting down server should clean up streams');
+  test('calling serverConnection.endStreams should clean up streams', async () => {
+    const streams: Array<QUICStream> = [];
+    const serverStreamP = firstValueFrom(serverConnection.stream$);
+    const clientStream = clientConnection.newStream();
+    streams.push(clientStream);
+    const clientWriter = clientStream.writable.getWriter();
+    // Writing a message should trigger the stream creation on the server side.
+    await clientWriter.write(Buffer.from('message'));
+    streams.push(await serverStreamP);
+    const serverForwardStream = serverConnection.newStream();
+    streams.push(serverForwardStream);
+    const clientReverseStream = firstValueFrom(clientConnection.stream$);
+    const serverForwardWriter = serverForwardStream.writable.getWriter();
+    await serverForwardWriter.write(Buffer.from('message'));
+    streams.push(await clientReverseStream);
+    const streamsCloseP = Promise.all(
+      streams.map((v) => firstValueFrom(v.complete$)),
+    );
+
+    await serverConnection.endStreams(true);
+    await streamsCloseP;
+    expect(clientConnection.openStreams).toBe(0);
+  });
+  test('calling concurrent endStreams should clean up streams', async () => {
+    const streams: Array<QUICStream> = [];
+    const serverStreamP = firstValueFrom(serverConnection.stream$);
+    const clientStream = clientConnection.newStream();
+    streams.push(clientStream);
+    const clientWriter = clientStream.writable.getWriter();
+    // Writing a message should trigger the stream creation on the server side.
+    await clientWriter.write(Buffer.from('message'));
+    streams.push(await serverStreamP);
+    const serverForwardStream = serverConnection.newStream();
+    streams.push(serverForwardStream);
+    const clientReverseStream = firstValueFrom(clientConnection.stream$);
+    const serverForwardWriter = serverForwardStream.writable.getWriter();
+    await serverForwardWriter.write(Buffer.from('message'));
+    streams.push(await clientReverseStream);
+    const streamsCloseP = Promise.all(
+      streams.map((v) => firstValueFrom(v.complete$)),
+    );
+
+    await Promise.all([
+      serverConnection.endStreams(true),
+      clientConnection.endStreams(true),
+    ]);
+    await streamsCloseP;
+    expect(clientConnection.openStreams).toBe(0);
+  });
+  test('shutting down client should clean up streams', async () => {
+    const streams: Array<QUICStream> = [];
+    const serverStreamP = firstValueFrom(serverConnection.stream$);
+    const clientStream = clientConnection.newStream();
+    streams.push(clientStream);
+    const clientWriter = clientStream.writable.getWriter();
+    // Writing a message should trigger the stream creation on the server side.
+    await clientWriter.write(Buffer.from('message'));
+    streams.push(await serverStreamP);
+    const serverForwardStream = serverConnection.newStream();
+    streams.push(serverForwardStream);
+    const clientReverseStream = firstValueFrom(clientConnection.stream$);
+    const serverForwardWriter = serverForwardStream.writable.getWriter();
+    await serverForwardWriter.write(Buffer.from('message'));
+    streams.push(await clientReverseStream);
+    const streamsCloseP = Promise.all(
+      streams.map((v) => firstValueFrom(v.complete$)),
+    );
+
+    await client.destroy({ isApp: true, errorCode: 1, force: true });
+    await streamsCloseP;
+    expect(clientConnection.openStreams).toBe(0);
+  });
+  test('shutting down server should clean up streams', async () => {
+    const streams: Array<QUICStream> = [];
+    const serverStreamP = firstValueFrom(serverConnection.stream$);
+    const clientStream = clientConnection.newStream();
+    streams.push(clientStream);
+    const clientWriter = clientStream.writable.getWriter();
+    // Writing a message should trigger the stream creation on the server side.
+    await clientWriter.write(Buffer.from('message'));
+    streams.push(await serverStreamP);
+    const serverForwardStream = serverConnection.newStream();
+    streams.push(serverForwardStream);
+    const clientReverseStream = firstValueFrom(clientConnection.stream$);
+    const serverForwardWriter = serverForwardStream.writable.getWriter();
+    await serverForwardWriter.write(Buffer.from('message'));
+    streams.push(await clientReverseStream);
+    const streamsCloseP = Promise.all(
+      streams.map((v) => firstValueFrom(v.complete$)),
+    );
+
+    await server.stop({ isApp: true, errorCode: 1, force: true });
+    await streamsCloseP;
+    expect(clientConnection.openStreams).toBe(0);
+  });
 
   describe('stream completion tests', () => {
     // Here we have a bunch of ways the forward and reverse streams can end. They can end gracefully

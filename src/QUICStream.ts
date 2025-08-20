@@ -27,9 +27,9 @@ export enum StreamState {
   Killed = 18,
 }
 
-const CHECK_STATES = true;
-const LOG_COMPLETE_EVENTS = true;
-const LOG_STREAM_STEPS = true;
+const CHECK_STATES = false;
+const LOG_COMPLETE_EVENTS = false;
+const LOG_STREAM_STEPS = false;
 const CHUNK_SIZE = 1024;
 
 class QUICStream {
@@ -193,7 +193,7 @@ class QUICStream {
       // We must do a Recv to work out which is which
       const finished = this.connection.connection.streamFinished(this.id);
       if (finished) {
-        this.logger.warn(`finished ${this.id}`);
+        if (CHECK_STATES) this.logger.warn(`finished ${this.id}`);
         // We need to tigger a read and end the readable stream with an error
         try {
           const buf = Buffer.alloc(1024);
@@ -223,7 +223,9 @@ class QUICStream {
       try {
         this.connection.connection.streamSend(this.id, Buffer.alloc(0), false);
       } catch (e) {
-        this.logger.error(`writable failed with ${e.message}`);
+        if (CHECK_STATES) {
+          this.logger.error(`writable failed with ${e.message}`);
+        }
         this.writableController.error(e);
         this.updateWritableComplete();
       }
@@ -361,6 +363,15 @@ class QUICStream {
     if (!this._readableComplete) {
       this.readableController.error(error);
       this.readableCancel();
+      if (this.connection.isDraining || this.connection.isClosed) {
+        this.logger.error(
+          'there will be no more updates so we need to close early.',
+        );
+        // TODO: proper error.
+        this.streamEvents$.next(StreamState.ReadableErrored);
+        this.readableController.error(new Error('Stream finished'));
+        this.updateReadableComplete();
+      }
     }
   }
 }

@@ -24,6 +24,8 @@ import * as events from './events.js';
 import * as errors from './errors.js';
 import QUICConnectionId from './QUICConnectionId.js';
 
+const LOG = false;
+
 interface QUICServer extends startStop.StartStop {}
 @startStop.StartStop({
   eventStart: events.EventQUICServerStart,
@@ -366,9 +368,12 @@ class QUICServer {
     const stopConnectionPs: Array<Promise<void>> = [];
     for (const connection of this.socket.connectionMap.serverConnections.values()) {
       stopConnectionPs.push(
-        firstValueFrom(connection.closed$, { defaultValue: undefined }),
+        (async () => {
+          await connection.endStreams(force);
+          connection.kill({ isApp, errorCode, reason });
+          await firstValueFrom(connection.closed$, { defaultValue: undefined });
+        })(),
       );
-      connection.kill({ isApp, errorCode, reason });
     }
     await Promise.all(stopConnectionPs);
     if (!this._closed) {
@@ -446,9 +451,11 @@ class QUICServer {
         versionDatagram,
       );
       try {
-        this.logger.warn(
-          `sent version packet ${versionDatagramLength}->${remoteInfo.port}:${remoteInfo.host}`,
-        );
+        if (LOG) {
+          this.logger.warn(
+            `sent version packet ${versionDatagramLength}->${remoteInfo.port}:${remoteInfo.host}`,
+          );
+        }
         await this.socket.send_(
           versionDatagram,
           0,
@@ -483,9 +490,11 @@ class QUICServer {
         retryDatagram,
       );
       try {
-        this.logger.warn(
-          `sent retry packet ${retryDatagramLength}->${remoteInfo.port}:${remoteInfo.host}`,
-        );
+        if (LOG) {
+          this.logger.warn(
+            `sent retry packet ${retryDatagramLength}->${remoteInfo.port}:${remoteInfo.host}`,
+          );
+        }
         await this.socket.send_(
           retryDatagram,
           0,

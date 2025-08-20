@@ -23,7 +23,7 @@ import * as events from './events.js';
 import * as errors from './errors.js';
 import QUICConnectionId from './QUICConnectionId.js';
 
-const LOG_PACKETS = true;
+const LOG_PACKETS = false;
 
 type MessageData = {
   data: Buffer;

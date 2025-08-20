@@ -19,8 +19,8 @@ import * as utils from './utils.js';
 import QUICConnectionId from './QUICConnectionId.js';
 import QUICStream from './QUICStream.js';
 
-const LOG_STAGES = true;
-const LOG_STATE_CHAGES = true;
+const LOG_STAGES = false;
+const LOG_STATE_CHAGES = false;
 
 class QUICConnection {
   // TODO: define static constructors here;
@@ -325,10 +325,7 @@ class QUICConnection {
   public processSend(): void {
     if (LOG_STAGES) this.logger.warn(`!----- processSend -----!`);
     try {
-      if (this.connection.isDraining()) {
-        this.logger.warn('skipping due to draining state');
-        return;
-      }
+      if (this.connection.isDraining()) return;
       while (true) {
         const sendBuffer = Buffer.allocUnsafe(
           this.config.maxSendUdpPayloadSize,
@@ -513,6 +510,10 @@ class QUICConnection {
     return this.peerCertChain_;
   }
 
+  public get openStreams(): number {
+    return this.streamMap.size;
+  }
+
   // TODO: we need some method to end streams
   public async endStreams(force: boolean): Promise<void> {
     // Prevent new streams from being created
@@ -591,7 +592,9 @@ class QUICConnection {
           this.rejectStream(streamId);
           continue;
         }
-        this.logger.warn(`creating new stream for ${streamId} on writable`);
+        if (LOG_STATE_CHAGES) {
+          this.logger.warn(`creating new stream for ${streamId} on writable`);
+        }
         quicStream = new QUICStream(
           streamId,
           this,
@@ -610,7 +613,9 @@ class QUICConnection {
           this.rejectStream(streamId);
           continue;
         }
-        this.logger.warn(`creating new stream for ${streamId} on readable`);
+        if (LOG_STATE_CHAGES) {
+          this.logger.warn(`creating new stream for ${streamId} on readable`);
+        }
         quicStream = new QUICStream(
           streamId,
           this,
@@ -664,9 +669,11 @@ class QUICConnection {
       Buffer.alloc(0),
       false,
     );
-    this.logger.warn(
-      `Stream ${streamId!} initiated with zero length message ${result}`,
-    );
+    if (LOG_STATE_CHAGES) {
+      this.logger.warn(
+        `Stream ${streamId!} initiated with zero length message ${result}`,
+      );
+    }
     this.processSend();
     return quicStream;
   }
@@ -675,9 +682,6 @@ class QUICConnection {
     this.streamMap.set(quicStream.id, quicStream);
     quicStream.complete$.subscribe(() => {
       this.streamMap.delete(quicStream.id);
-      this.logger.warn(
-        `streamMap delete ${quicStream.id} with ${this.streamMap.size} streams remaining`,
-      );
     });
   }
 }
