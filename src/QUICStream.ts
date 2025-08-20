@@ -1,5 +1,4 @@
 import type QUICConnection from './QUICConnection.js';
-import type Logger from '@matrixai/logger';
 import { WritableStream, ReadableStream } from 'stream/web';
 import { firstValueFrom, ReplaySubject, Subject } from 'rxjs';
 import * as utils from './utils.js';
@@ -27,7 +26,8 @@ export enum StreamState {
   Killed = 18,
 }
 
-const CHUNK_SIZE = 1024;
+// The usual message data size from a single packet
+const CHUNK_SIZE = 1307;
 
 class QUICStream {
   public readonly writable: WritableStream<Buffer>;
@@ -122,9 +122,10 @@ class QUICStream {
     while (true) {
       const buffer = Buffer.allocUnsafe(CHUNK_SIZE);
       const result = this.connection.connection.streamRecv(this.id, buffer);
+      // Check if the finished state has updated to dispatch the event
+      void this.isFinished;
       if (result == null) {
-        // If we enqueued any chunks then we need to wait for the readableStream to drain
-        this.checkState();
+        // If we enqueued any chunks, then we need to wait for the readableStream to drain
         if (chunks > 0) break;
         // If no chunks queued then wait for more data
         this.streamEvents$.next(StreamState.ReadableBlocked);
@@ -136,7 +137,6 @@ class QUICStream {
       this.streamEvents$.next(StreamState.ReadableRead);
       if (bytesRead > 0) controller.enqueue(buffer.subarray(0, bytesRead));
       chunks++;
-      this.checkState();
       if (finished) {
         this.streamEvents$.next(StreamState.ReadableFinished);
         controller.close();
@@ -151,8 +151,8 @@ class QUICStream {
     this.connection.connection.streamShutdown(this.id, Shutdown.Read, 42);
     this.readableCancelled = true;
     this.connection.processSend();
-    // Cancelling doesn't immedietly close the readable stream. The state will update once
-    //  the cancellation has been acked and that packet processed. Annoyingly when this happens
+    // Cancelling doesn't immediately close the readable stream. The state will update once
+    //  the cancellation has been acked and that packet processed. Annoyingly, when this happens,
     //  the stream isn't added to the readable iterator. So we need to check each time a
     //  new packet is received until it finishes.
     const subscription = this.connection.recvHandled$.subscribe(() => {
@@ -179,10 +179,9 @@ class QUICStream {
       cancel: this.readableCancel,
     });
     this.readReady$.subscribe(() => {
-      // If the stream is finished here then it either ended with an error or a 0-len fin packet.
+      // If the stream is finished here, then it either ended with an error or a 0-len fin packet.
       // We must do a Recv to work out which is which
-      const finished = this.connection.connection.streamFinished(this.id);
-      if (finished) {
+      if (this.isFinished) {
         // We need to tigger a read and end the readable stream with an error
         try {
           const buf = Buffer.alloc(1024);
@@ -215,12 +214,17 @@ class QUICStream {
         this.updateWritableComplete();
       }
     });
-  }
-
-  protected checkState() {
-    void this.isFinished;
-    void this.isReadable;
-    void this.isWritable;
+    this.complete$.subscribe({
+      complete: () => {
+        // Complete all other subjects since no other updates should happen.
+        this.readReady$.complete();
+        this.writeReady$.complete();
+        this.streamEvents$.complete();
+        this.finished$.complete();
+        this.readableComplete$.complete();
+        this.writableComplete$.complete();
+      },
+    });
   }
 
   protected isFinished_ = false;
@@ -235,30 +239,6 @@ class QUICStream {
       this.finished$.next();
     }
     return this.isFinished_;
-  }
-
-  protected isReadable_ = false;
-  public readonly readable$: ReplaySubject<boolean> = new ReplaySubject(1);
-  public get isReadable(): boolean {
-    const value = this.connection.connection.streamReadable(this.id);
-    if (this.isReadable_ !== value) {
-      // Update and dispatch
-      this.readable$.next(value);
-    }
-    this.isReadable_ = value;
-    return value;
-  }
-
-  protected isWritable_ = false;
-  public readonly writable$: ReplaySubject<boolean> = new ReplaySubject(1);
-  public get isWritable(): boolean {
-    const value = this.connection.connection.streamReadable(this.id);
-    if (this.isWritable_ !== value) {
-      // Update and dispatch
-      this.writable$.next(value);
-    }
-    this.isWritable_ = value;
-    return value;
   }
 
   // Logic for stream completion
@@ -283,7 +263,6 @@ class QUICStream {
     if (this._readableComplete) return;
     this._readableComplete = true;
     this.readableComplete$.next();
-    this.readableComplete$.complete();
     if (this._writableComplete) {
       this._complete = true;
       this.complete$.next();
@@ -295,7 +274,6 @@ class QUICStream {
     if (this._writableComplete) return;
     this._writableComplete = true;
     this.writableComplete$.next();
-    this.writableComplete$.complete();
     if (this._readableComplete) {
       this._complete = true;
       this.complete$.next();
@@ -303,7 +281,6 @@ class QUICStream {
     }
   }
 
-  // TODO: we should only close out the stream if
   public kill() {
     this.streamEvents$.next(StreamState.Killed);
     // TODO: proper error.

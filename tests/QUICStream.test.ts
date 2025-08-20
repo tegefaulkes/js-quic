@@ -1,6 +1,7 @@
 import type { ClientCryptoOps, ServerCryptoOps } from '#types.js';
 import type { TLSConfigs } from './utils.js';
 import type QUICConnection from '#QUICConnection.js';
+import type { Subject } from 'rxjs';
 import Logger, { formatting, LogLevel, StreamHandler } from '@matrixai/logger';
 import { test } from '@fast-check/jest';
 import { firstValueFrom } from 'rxjs';
@@ -959,6 +960,48 @@ describe('QUICStream', () => {
       await firstValueFrom(serverStream.readableComplete$);
       await firstValueFrom(serverStream.complete$);
     });
+  });
+
+  test('stream completion should complete all observables', async () => {
+    const serverStreamP = firstValueFrom(serverConnection.stream$);
+    const clientStream = clientConnection.newStream();
+    const clientWriter = clientStream.writable.getWriter();
+    // Writing a message should trigger the stream creation on the server side.
+    await clientWriter.write(Buffer.from('message'));
+    await clientWriter.close();
+    const serverStream = await serverStreamP;
+    const serverWriter = serverStream.writable.getWriter();
+    await serverWriter.write(Buffer.from('message'));
+    await serverWriter.close();
+
+    await consumeReadable(clientStream);
+    await consumeReadable(serverStream);
+
+    async function completionProm(subject: Subject<unknown>): Promise<void> {
+      const { resolveP, p } = utils.promise<void>();
+      subject.subscribe({
+        complete: () => {
+          resolveP();
+        },
+      });
+      return p;
+    }
+
+    await completionProm(clientStream.readReady$);
+    await completionProm(clientStream.writeReady$);
+    await completionProm(clientStream.streamEvents$);
+    await completionProm(clientStream.finished$);
+    await completionProm(clientStream.readableComplete$);
+    await completionProm(clientStream.writableComplete$);
+    await completionProm(clientStream.complete$);
+
+    await completionProm(serverStream.readReady$);
+    await completionProm(serverStream.writeReady$);
+    await completionProm(serverStream.streamEvents$);
+    await completionProm(serverStream.finished$);
+    await completionProm(serverStream.readableComplete$);
+    await completionProm(serverStream.writableComplete$);
+    await completionProm(serverStream.complete$);
   });
 
   test.todo('should clean up streams if connection times out');
