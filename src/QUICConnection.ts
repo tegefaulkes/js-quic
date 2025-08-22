@@ -21,8 +21,22 @@ import * as utils from './utils.js';
 import QUICConnectionId from './QUICConnectionId.js';
 import QUICStream from './QUICStream.js';
 
-const LOG_STAGES = false;
-const LOG_STATE_CHAGES = false;
+export enum Step {
+  RecvBegin = 0,
+  RecvEnd = 1,
+  StreamsBegin = 2,
+  StreamsEnd = 3,
+  StreamsWritableBegin = 4,
+  StreamsWritableEnd = 5,
+  StreamsReadableBegin = 6,
+  StreamsReadableEnd = 7,
+  SendBegin = 8,
+  SendEnd = 9,
+  StreamCreateWritable = 10,
+  StreamCreateReadable = 11,
+  StateBegin = 12,
+  StateEnd = 13,
+}
 
 class QUICConnection {
   static connectionConnect({
@@ -33,8 +47,9 @@ class QUICConnection {
     sourcePort,
     host,
     port,
-    codeToReason,
-    reasonToCode,
+    codeToReason = (type, code) =>
+      new Error(`${type.toString()} ${code.toString()}`),
+    reasonToCode = () => 1,
     logger,
   }: {
     serverName?: string;
@@ -59,7 +74,9 @@ class QUICConnection {
       );
     }
     if (scid.byteLength !== quiche.MAX_CONN_ID_LEN) {
-      throw Error(`connection id bytelength must be ${quiche.MAX_CONN_ID_LEN}`);
+      throw Error(
+        `connection id byte-length must be ${quiche.MAX_CONN_ID_LEN}`,
+      );
     }
 
     const quicheConfig = buildQuicheConfig(config);
@@ -103,8 +120,9 @@ class QUICConnection {
     sourcePort,
     host,
     port,
-    codeToReason,
-    reasonToCode,
+    codeToReason = (type, code) =>
+      new Error(`${type.toString()} ${code.toString()}`),
+    reasonToCode = () => 1,
     logger,
   }: {
     serverName?: string;
@@ -168,6 +186,7 @@ class QUICConnection {
   //  - When the application interacts with the streams
   public readonly send$: Subject<SendData> = new Subject();
   public readonly recvHandled$: Subject<void> = new Subject();
+  public readonly step$: Subject<Step> = new Subject();
 
   /**
    * Chain of local certificates from leaf to root in DER format.
@@ -190,8 +209,8 @@ class QUICConnection {
     public readonly sourcePort: Port,
     public readonly host: Host,
     public readonly port: Port,
-    protected codeToReason: StreamCodeToReason | undefined,
-    protected reasonToCode: StreamReasonToCode | undefined,
+    protected codeToReason: StreamCodeToReason,
+    protected reasonToCode: StreamReasonToCode,
     protected logger: Logger,
   ) {
     if (config.cert != null) {
@@ -201,62 +220,6 @@ class QUICConnection {
     if (this.config.ca != null) {
       const caPEMs = utils.collectPEMs(this.config.ca);
       this.caDERs = caPEMs.map(utils.pemToDER);
-    }
-
-    if (LOG_STATE_CHAGES) {
-      this.timeout$.subscribe(() => this.logger.warn(`TIMEOUT!`));
-    }
-    if (LOG_STATE_CHAGES) {
-      this.established$.subscribe(() =>
-        this.logger.warn(`CHANGED established$`),
-      );
-    }
-    if (LOG_STATE_CHAGES) {
-      this.isResumed$.subscribe((v) =>
-        this.logger.warn(`CHANGED isResumed$ ${v}`),
-      );
-    }
-    if (LOG_STATE_CHAGES) {
-      this.isInEarlyData$.subscribe((v) =>
-        this.logger.warn(`CHANGED isInEarlyData$ ${v}`),
-      );
-    }
-    if (LOG_STATE_CHAGES) {
-      this.isReadable$.subscribe((v) =>
-        this.logger.warn(`CHANGED isReadable$ ${v}`),
-      );
-    }
-    if (LOG_STATE_CHAGES) {
-      this.draining$.subscribe(() => this.logger.warn(`CHANGED draining$`));
-    }
-    if (LOG_STATE_CHAGES) {
-      this.closed$.subscribe(() => this.logger.warn(`CHANGED closed$`));
-    }
-    if (LOG_STATE_CHAGES) {
-      this.timedOut$.subscribe(() => this.logger.warn(`CHANGED timedOut$`));
-    }
-    if (LOG_STATE_CHAGES) {
-      this.peerError$.subscribe((v) =>
-        this.logger.warn(
-          `CHANGED peerError$  app:${v.isApp} code:${
-            v.errorCode
-          } Reason:${Buffer.from(v.reason).toString()}`,
-        ),
-      );
-    }
-    if (LOG_STATE_CHAGES) {
-      this.localError$.subscribe((v) =>
-        this.logger.warn(
-          `CHANGED localError$ app:${v.isApp} code:${
-            v.errorCode
-          } Reason:${Buffer.from(v.reason).toString()}`,
-        ),
-      );
-    }
-    if (LOG_STATE_CHAGES) {
-      this.peerCertChain$.subscribe(() =>
-        this.logger.warn(`CHANGED peerCertChain$`),
-      );
     }
   }
 
@@ -295,8 +258,8 @@ class QUICConnection {
   /**
    * This just shoves data into the underlying connection instance and triggers observable events
    */
-  public recv(data: Uint8Array, remoteInfo: RemoteInfo) {
-    if (LOG_STAGES) this.logger.warn(`!----- Processing recv -----!`);
+  public processRecv(data: Uint8Array, remoteInfo: RemoteInfo) {
+    this.step$.next(Step.RecvBegin);
     const recvInfo: RecvInfo = {
       to: {
         host: this.sourceHost,
@@ -327,12 +290,12 @@ class QUICConnection {
     this.recvHandled$.next();
     this.processStreams();
     this.processSend();
-    if (LOG_STAGES) this.logger.warn(`!----- Processing recv done -----!`);
+    this.step$.next(Step.RecvEnd);
   }
 
   // This will extract send data from the connection and emit it on the `sendData$` subject
   public processSend(): void {
-    if (LOG_STAGES) this.logger.warn(`!----- processSend -----!`);
+    this.step$.next(Step.SendBegin);
     try {
       if (this.connection.isDraining()) return;
       while (true) {
@@ -356,24 +319,12 @@ class QUICConnection {
     } finally {
       this.checkState();
     }
-    if (LOG_STAGES) this.logger.warn(`!----- ProcessSend done -----!`);
+    this.step$.next(Step.SendEnd);
   }
 
   protected checkState(): void {
-    if (LOG_STAGES) this.logger.warn(`!----- checkState -----!`);
+    this.step$.next(Step.StateBegin);
     this.checkTimeout();
-    // This.logger.warn(`activeSourceCids: ${this.connection.activeSourceCids()}`);
-    // this.logger.warn(`maxActiveSourceCids: ${this.connection.maxActiveSourceCids()}`);
-    // this.logger.warn(`sourceCidsLeft: ${this.connection.sourceCidsLeft()}`);
-    // this.logger.warn(`retiredScidNext: ${this.connection.retiredScidNext()}`);
-    // this.logger.warn(`availableDcids: ${this.connection.availableDcids()}`);
-    // this.logger.warn(`traceId: ${this.connection.traceId()}`);
-    // this.logger.warn(`applicationProto: ${this.connection.applicationProto()}`);
-    // this.logger.warn(`serverName: ${this.connection.serverName()}`);
-    // this.logger.warn(`session: ${this.connection.session()}`);
-    // this.logger.warn(`sourceId: ${this.connection.sourceId()}`);
-    // this.logger.warn(`destinationId: ${this.connection.destinationId()}`);
-    // this.logger.warn(`stats: ${this.connection.stats()}`);
     void this.isEstablished;
     void this.isResumed;
     void this.isInEarlyData;
@@ -384,7 +335,7 @@ class QUICConnection {
     void this.peerError;
     void this.localError;
     void this.peerCertChain;
-    if (LOG_STAGES) this.logger.warn(`!----- checkState Done -----!`);
+    this.step$.next(Step.StateEnd);
   }
 
   protected timeoutTimer: NodeJS.Timeout | undefined;
@@ -530,7 +481,7 @@ class QUICConnection {
     for (const [, stream] of this.streamMap) {
       streams.push(firstValueFrom(stream.complete$));
 
-      // If forced then we need to trigger the stream to end
+      // If forced, then we need to trigger the stream to end
       if (force) stream.kill();
     }
     await Promise.all(streams);
@@ -552,7 +503,7 @@ class QUICConnection {
   // Stream related methods
 
   /**
-   * Client initiated bidirectional stream starts at 0.
+   * Client-initiated bidirectional stream starts at 0.
    * Increment by 4 to get the next ID.
    */
   protected streamIdClientBidi: StreamId = 0b00;
@@ -587,8 +538,8 @@ class QUICConnection {
   // Process streams by iterating over the readable and writable iterators
   // and letting the streams know there is data.
   public processStreams(): void {
-    if (LOG_STAGES) this.logger.warn(`!----- processStreams -----!`);
-    if (LOG_STAGES) this.logger.warn(`!----- processStreams writables -----!`);
+    this.step$.next(Step.StreamsBegin);
+    this.step$.next(Step.StreamsWritableBegin);
     for (const streamId of this.connection.writable()) {
       let quicStream = this.streamMap.get(streamId);
       if (quicStream == null) {
@@ -596,9 +547,7 @@ class QUICConnection {
           this.rejectStream(streamId);
           continue;
         }
-        if (LOG_STATE_CHAGES) {
-          this.logger.warn(`creating new stream for ${streamId} on writable`);
-        }
+
         quicStream = new QUICStream(
           streamId,
           this,
@@ -609,17 +558,16 @@ class QUICConnection {
         this.stream$.next(quicStream);
       }
       quicStream.writeReady$.next();
+      this.step$.next(Step.StreamCreateWritable);
     }
-    if (LOG_STAGES) this.logger.warn(`!----- processStreams readables -----!`);
+    this.step$.next(Step.StreamsWritableEnd);
+    this.step$.next(Step.StreamsReadableBegin);
     for (const streamId of this.connection.readable()) {
       let quicStream = this.streamMap.get(streamId);
       if (quicStream == null) {
         if (this.rejectStreams) {
           this.rejectStream(streamId);
           continue;
-        }
-        if (LOG_STATE_CHAGES) {
-          this.logger.warn(`creating new stream for ${streamId} on readable`);
         }
         quicStream = new QUICStream(
           streamId,
@@ -629,16 +577,26 @@ class QUICConnection {
         );
         this.setupQuicStream(quicStream);
         this.stream$.next(quicStream);
+        this.step$.next(Step.StreamCreateReadable);
       }
       quicStream.readReady$.next();
     }
-    if (LOG_STAGES) this.logger.warn(`!----- processStreams done -----!`);
+    this.step$.next(Step.StreamsReadableEnd);
+    this.step$.next(Step.StreamsEnd);
   }
 
   protected rejectStream(streamId: StreamId): void {
-    // TODO: use a configured error code
-    this.connection.streamShutdown(streamId, Shutdown.Read, 1);
-    this.connection.streamShutdown(streamId, Shutdown.Write, 1);
+    const error = new errors.ErrorQUICConnectionDraining();
+    this.connection.streamShutdown(
+      streamId,
+      Shutdown.Read,
+      this.reasonToCode('read', error),
+    );
+    this.connection.streamShutdown(
+      streamId,
+      Shutdown.Write,
+      this.reasonToCode('write', error),
+    );
   }
 
   /**
@@ -669,16 +627,7 @@ class QUICConnection {
       this.reasonToCode,
     );
     this.setupQuicStream(quicStream);
-    const result = this.connection.streamSend(
-      quicStream.id,
-      Buffer.alloc(0),
-      false,
-    );
-    if (LOG_STATE_CHAGES) {
-      this.logger.warn(
-        `Stream ${streamId!} initiated with zero length message ${result}`,
-      );
-    }
+    this.connection.streamSend(quicStream.id, Buffer.alloc(0), false);
     this.processSend();
     return quicStream;
   }

@@ -491,7 +491,6 @@ describe('QUICStream', () => {
     await streamsCloseP;
     await endingStreamsP;
 
-    // FIXME: proper error
     expect(() => clientConnection.newStream()).toThrow(
       errors.ErrorQUICConnectionDraining,
     );

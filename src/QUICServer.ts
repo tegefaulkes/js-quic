@@ -548,7 +548,7 @@ class QUICServer {
     });
     this.connection$.next(connection);
     connection.send$.subscribe(this.socket.socketSend$);
-    connection.recv(data, remoteInfo);
+    connection.processRecv(data, remoteInfo);
     return connection;
   }
 

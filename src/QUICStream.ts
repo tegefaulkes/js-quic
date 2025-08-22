@@ -205,9 +205,8 @@ class QUICStream {
   constructor(
     public readonly id: number,
     public readonly connection: QUICConnection,
-    protected codeToReason: StreamCodeToReason = (type, code) =>
-      new Error(`${type.toString()} ${code.toString()}`),
-    protected reasonToCode: StreamReasonToCode = () => 1,
+    protected codeToReason: StreamCodeToReason,
+    protected reasonToCode: StreamReasonToCode,
   ) {
     this.writable = new WritableStream<Buffer>({
       start: this.writableStart,

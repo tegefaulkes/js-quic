@@ -336,7 +336,7 @@ class QUICSocket {
         // this.logger.warn(
         //   `recv ${connection.connectionIdShared}@${remoteInfo_.host}:${remoteInfo_.port}->${data.byteLength}`,
         // );
-        connection.recv(data, remoteInfo_);
+        connection.processRecv(data, remoteInfo_);
       } else {
         // If the server is not registered, we cannot attempt to create a new
         // connection for this packet.
