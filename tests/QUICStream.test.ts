@@ -11,6 +11,7 @@ import QUICServer from '#QUICServer.js';
 import QUICClient from '#QUICClient.js';
 import QUICStream from '#QUICStream.js';
 import * as utils from '#utils.js';
+import * as errors from '#errors.js';
 
 async function consumeReadable(stream: QUICStream) {
   for await (const _chunk of stream.readable) {
@@ -311,8 +312,7 @@ describe('QUICStream', () => {
       }
     })();
     await firstValueFrom(serverStream.readableComplete$);
-    // FIXME: check actual error
-    await expect(readP).rejects.toThrow();
+    await expect(readP).rejects.toThrow('read 1');
   });
   test('should handle writeable stream abort while data blocked', async () => {
     const serverStreamP = firstValueFrom(serverConnection.stream$);
@@ -332,8 +332,7 @@ describe('QUICStream', () => {
     // Waiting for the readable stream to end despite not being consumed
     await firstValueFrom(serverStream.readableComplete$);
     waitProm.resolveP();
-    // FIXME: check actual error
-    await expect(readP).rejects.toThrow();
+    await expect(readP).rejects.toThrow('read 1');
   });
   test('should handle readable stream cancel with data sent', async () => {
     const message = Buffer.from('message');
@@ -347,8 +346,7 @@ describe('QUICStream', () => {
     await serverReader.read();
     await serverReader.cancel(new Error('some error'));
     await firstValueFrom(clientStream.writableComplete$);
-    // TODO: use actual error
-    await expect(clientWriter.write(message)).rejects.toThrow();
+    await expect(clientWriter.write(message)).rejects.toThrow(`write 1`);
   });
   // It's not possible to cancel the readable stream before data is sent
   //  because we need data to be sent to create the stream in the first place.
@@ -362,9 +360,10 @@ describe('QUICStream', () => {
     const serverStream = await serverStreamP;
     serverStream.kill();
 
-    // TODO: proper error
-    await expect(consumeReadable(serverStream)).rejects.toThrow();
-    await expect(consumeReadable(clientStream)).rejects.toThrow();
+    await expect(consumeReadable(serverStream)).rejects.toThrow(
+      errors.ErrorQUICStreamKilled,
+    );
+    await expect(consumeReadable(clientStream)).rejects.toThrow('read 1');
 
     await firstValueFrom(clientStream.writableComplete$);
     await firstValueFrom(clientStream.readableComplete$);
@@ -384,8 +383,7 @@ describe('QUICStream', () => {
     await consumeReadable(serverStream);
     serverStream.kill();
 
-    // TODO: proper error
-    await expect(consumeReadable(clientStream)).rejects.toThrow();
+    await expect(consumeReadable(clientStream)).rejects.toThrow('read 1');
 
     await firstValueFrom(clientStream.writableComplete$);
     await firstValueFrom(clientStream.readableComplete$);
@@ -405,8 +403,9 @@ describe('QUICStream', () => {
     await consumeReadable(clientStream);
     serverStream.kill();
 
-    // TODO: proper error
-    await expect(consumeReadable(serverStream)).rejects.toThrow();
+    await expect(consumeReadable(serverStream)).rejects.toThrow(
+      errors.ErrorQUICStreamKilled,
+    );
 
     await firstValueFrom(clientStream.writableComplete$);
     await firstValueFrom(clientStream.readableComplete$);
@@ -426,8 +425,7 @@ describe('QUICStream', () => {
     await consumeReadable(serverStream);
     serverStream.kill();
 
-    // TODO: proper error
-    await expect(consumeReadable(clientStream)).rejects.toThrow();
+    await expect(consumeReadable(clientStream)).rejects.toThrow('read 1');
 
     await firstValueFrom(clientStream.writableComplete$);
     await firstValueFrom(clientStream.readableComplete$);
@@ -445,9 +443,10 @@ describe('QUICStream', () => {
     const serverStream = await serverStreamP;
     serverStream.kill();
 
-    // TODO: proper error
-    await expect(consumeReadable(serverStream)).rejects.toThrow();
-    await expect(consumeReadable(clientStream)).rejects.toThrow();
+    await expect(consumeReadable(serverStream)).rejects.toThrow(
+      errors.ErrorQUICStreamKilled,
+    );
+    await expect(consumeReadable(clientStream)).rejects.toThrow('read 1');
 
     await firstValueFrom(clientStream.writableComplete$);
     await firstValueFrom(clientStream.readableComplete$);
@@ -492,8 +491,10 @@ describe('QUICStream', () => {
     await streamsCloseP;
     await endingStreamsP;
 
-    // TODO: check if new streams are rejected
-    expect(() => clientConnection.newStream()).toThrow();
+    // FIXME: proper error
+    expect(() => clientConnection.newStream()).toThrow(
+      errors.ErrorQUICConnectionDraining,
+    );
     const newServerStream = serverConnection.newStream();
     const newServerStreamWriter = newServerStream.writable.getWriter();
     await newServerStreamWriter.write(Buffer.from('message'));
@@ -664,8 +665,7 @@ describe('QUICStream', () => {
       })();
       await firstValueFrom(clientStream.writableComplete$);
       await firstValueFrom(serverStream.readableComplete$);
-      // FIXME: check actual error
-      await expect(readP).rejects.toThrow();
+      await expect(readP).rejects.toThrow('read 1');
     });
     test('should complete with FRA', async () => {
       const serverStreamP = firstValueFrom(serverConnection.stream$);
@@ -682,10 +682,9 @@ describe('QUICStream', () => {
 
       await firstValueFrom(serverStream.readableComplete$);
       await firstValueFrom(clientStream.writableComplete$);
-      // FIXME: check actual error
-      await expect(
-        clientWriter.write(Buffer.from('message')),
-      ).rejects.toThrow();
+      await expect(clientWriter.write(Buffer.from('message'))).rejects.toThrow(
+        'write 1',
+      );
       // Canceled readable will just complete
       await consumeReadable(serverStream);
     });
@@ -763,8 +762,7 @@ describe('QUICStream', () => {
       await serverWriter.close();
 
       await consumeReadable(clientStream);
-      // TODO: proper error
-      await expect(consumeReadable(serverStream)).rejects.toThrow();
+      await expect(consumeReadable(serverStream)).rejects.toThrow('read 1');
 
       await firstValueFrom(clientStream.writableComplete$);
       await firstValueFrom(clientStream.readableComplete$);
@@ -785,8 +783,7 @@ describe('QUICStream', () => {
       await serverWriter.write(Buffer.from('message'));
       await serverWriter.abort(new Error('some error'));
 
-      // TODO: proper error
-      await expect(consumeReadable(clientStream)).rejects.toThrow();
+      await expect(consumeReadable(clientStream)).rejects.toThrow('read 1');
       await consumeReadable(serverStream);
 
       await firstValueFrom(clientStream.writableComplete$);
@@ -818,10 +815,9 @@ describe('QUICStream', () => {
       await firstValueFrom(serverStream.readableComplete$);
       await firstValueFrom(serverStream.complete$);
 
-      // TODO: proper errors
-      await expect(
-        clientWriter.write(Buffer.from('message')),
-      ).rejects.toThrow();
+      await expect(clientWriter.write(Buffer.from('message'))).rejects.toThrow(
+        'write 1',
+      );
     });
     test('should fully complete with FWA, RWA', async () => {
       const serverStreamP = firstValueFrom(serverConnection.stream$);
@@ -835,10 +831,8 @@ describe('QUICStream', () => {
       await serverWriter.write(Buffer.from('message'));
       await serverWriter.abort(new Error('some error'));
 
-      // TODO: proper error
-      await expect(consumeReadable(clientStream)).rejects.toThrow();
-      // TODO: proper error
-      await expect(consumeReadable(serverStream)).rejects.toThrow();
+      await expect(consumeReadable(clientStream)).rejects.toThrow('read 1');
+      await expect(consumeReadable(serverStream)).rejects.toThrow('read 1');
 
       await firstValueFrom(clientStream.writableComplete$);
       await firstValueFrom(clientStream.readableComplete$);
@@ -847,7 +841,6 @@ describe('QUICStream', () => {
       await firstValueFrom(serverStream.readableComplete$);
       await firstValueFrom(serverStream.complete$);
     });
-    // FIXME: The client readable stream should error since it was cancelled - check webstream behaviour here
     test('should fully complete with FWC, RRC', async () => {
       const serverStreamP = firstValueFrom(serverConnection.stream$);
       const clientStream = clientConnection.newStream();
@@ -879,8 +872,7 @@ describe('QUICStream', () => {
       await serverStream.readable.cancel(new Error('some error'));
       await serverStream.writable.abort(new Error('some error'));
 
-      // TODO: proper error
-      await expect(consumeReadable(clientStream)).rejects.toThrow();
+      await expect(consumeReadable(clientStream)).rejects.toThrow('read 1');
       // Canceled readable will just complete
       await consumeReadable(serverStream);
 
@@ -903,8 +895,7 @@ describe('QUICStream', () => {
 
       // Canceled readable will just complete
       await consumeReadable(clientStream);
-      // TODO: proper error
-      await expect(consumeReadable(serverStream)).rejects.toThrow();
+      await expect(consumeReadable(serverStream)).rejects.toThrow('read 1');
 
       await firstValueFrom(clientStream.writableComplete$);
       await firstValueFrom(clientStream.readableComplete$);
@@ -1012,4 +1003,6 @@ describe('QUICStream', () => {
   );
   test.todo('should throw stream limit error when limit is reached');
   test.todo('ended streams do not contribute to limit');
+  test.todo('test custom code to reason');
+  test.todo('test unidirectional streams');
 });

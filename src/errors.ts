@@ -211,12 +211,16 @@ class ErrorQUICConnectionInternal<T> extends ErrorQUICConnection<T> {
   static description = 'QUIC Connection internal error';
 }
 
+class ErrorQUICConnectionDraining<T> extends ErrorQUICConnection<T> {
+  static description = 'QUIC connection is draining streams';
+}
+
 class ErrorQUICStream<T> extends ErrorQUIC<T> {
   static description = 'QUIC Stream error';
 }
 
-class ErrorQUICStreamDestroyed<T> extends ErrorQUICStream<T> {
-  static description = 'QUIC Stream is destroyed';
+class ErrorQUICStreamKilled<T> extends ErrorQUICStream<T> {
+  static description = 'QUIC Stream is killed';
 }
 
 class ErrorQUICStreamLocalRead<T> extends ErrorQUICStream<T> {
@@ -333,8 +337,9 @@ export {
   ErrorQUICConnectionPeerTLS,
   ErrorQUICConnectionIdleTimeout,
   ErrorQUICConnectionInternal,
+  ErrorQUICConnectionDraining,
   ErrorQUICStream,
-  ErrorQUICStreamDestroyed,
+  ErrorQUICStreamKilled,
   ErrorQUICStreamLocalRead,
   ErrorQUICStreamLocalWrite,
   ErrorQUICStreamPeerRead,

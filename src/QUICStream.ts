@@ -1,7 +1,9 @@
 import type QUICConnection from './QUICConnection.js';
+import type { StreamCodeToReason, StreamReasonToCode } from './types.js';
 import { WritableStream, ReadableStream } from 'stream/web';
 import { firstValueFrom, ReplaySubject, Subject } from 'rxjs';
 import * as utils from './utils.js';
+import * as errors from './errors.js';
 import { Shutdown } from './native/index.js';
 
 export enum StreamState {
@@ -34,12 +36,11 @@ class QUICStream {
   public readonly readable: ReadableStream<Buffer>;
   public readonly readReady$: Subject<void> = new Subject();
   public readonly writeReady$: Subject<void> = new Subject();
+  public readonly streamEvents$: Subject<StreamState> = new Subject();
   protected writableAborted = false;
   protected readableCancelled = false;
   protected readableController: ReadableStreamController<Buffer>;
   protected writableController: WritableStreamDefaultController;
-
-  public readonly streamEvents$: Subject<StreamState> = new Subject();
 
   protected writableStart: UnderlyingSinkStartCallback = (controller) => {
     this.streamEvents$.next(StreamState.WritableStart);
@@ -64,7 +65,18 @@ class QUICStream {
         );
       } catch (e) {
         this.streamEvents$.next(StreamState.WritableErrored);
-        controller.error(e);
+        let error: Error;
+        const code = utils.isStreamStopped(e);
+        if (code != null) {
+          error = this.codeToReason('write', code);
+        } else {
+          error = new errors.ErrorQUICStreamInternal(
+            `stream send failed due to ${e.message}`,
+            { cause: e },
+          );
+        }
+        controller.error(error);
+        this.updateWritableComplete();
         return;
       }
       if (sentBytes == null) {
@@ -99,9 +111,13 @@ class QUICStream {
     this.connection.processSend();
     this.updateWritableComplete();
   };
-  protected writableAbort: UnderlyingSinkAbortCallback = (_reason) => {
+  protected writableAbort: UnderlyingSinkAbortCallback = (reason) => {
     this.streamEvents$.next(StreamState.WritableAborted);
-    this.connection.connection.streamShutdown(this.id, Shutdown.Write, 42);
+    this.connection.connection.streamShutdown(
+      this.id,
+      Shutdown.Write,
+      this.reasonToCode('write', reason),
+    );
     this.writableAborted = true;
     this.writeReady$.next();
     this.connection.processSend();
@@ -121,9 +137,28 @@ class QUICStream {
     let chunks = 0;
     while (true) {
       const buffer = Buffer.allocUnsafe(CHUNK_SIZE);
-      const result = this.connection.connection.streamRecv(this.id, buffer);
-      // Check if the finished state has updated to dispatch the event
-      void this.isFinished;
+      let result: [number, boolean] | null;
+      try {
+        result = this.connection.connection.streamRecv(this.id, buffer);
+      } catch (e) {
+        this.streamEvents$.next(StreamState.ReadableErrored);
+        let error: Error;
+        const code = utils.isStreamReset(e);
+        if (code != null) {
+          error = this.codeToReason('write', code);
+        } else {
+          error = new errors.ErrorQUICStreamInternal(
+            `stream recv failed due to ${e.message}`,
+            { cause: e },
+          );
+        }
+        controller.error(error);
+        this.updateReadableComplete();
+        return;
+      } finally {
+        // Check if the finished state has updated to dispatch the event
+        void this.isFinished;
+      }
       if (result == null) {
         // If we enqueued any chunks, then we need to wait for the readableStream to drain
         if (chunks > 0) break;
@@ -146,9 +181,13 @@ class QUICStream {
     }
   };
 
-  protected readableCancel: UnderlyingSourceCancelCallback = () => {
+  protected readableCancel: UnderlyingSourceCancelCallback = (reason) => {
     this.streamEvents$.next(StreamState.ReadableCancelled);
-    this.connection.connection.streamShutdown(this.id, Shutdown.Read, 42);
+    this.connection.connection.streamShutdown(
+      this.id,
+      Shutdown.Read,
+      this.reasonToCode('read', reason),
+    );
     this.readableCancelled = true;
     this.connection.processSend();
     // Cancelling doesn't immediately close the readable stream. The state will update once
@@ -166,6 +205,9 @@ class QUICStream {
   constructor(
     public readonly id: number,
     public readonly connection: QUICConnection,
+    protected codeToReason: StreamCodeToReason = (type, code) =>
+      new Error(`${type.toString()} ${code.toString()}`),
+    protected reasonToCode: StreamReasonToCode = () => 1,
   ) {
     this.writable = new WritableStream<Buffer>({
       start: this.writableStart,
@@ -197,10 +239,19 @@ class QUICStream {
           this.readableController.close();
           this.updateReadableComplete();
           // Return;
-        } catch {
-          // TODO: proper error.
+        } catch (e) {
           this.streamEvents$.next(StreamState.ReadableErrored);
-          this.readableController.error(new Error('Stream finished'));
+          let error: Error;
+          const code = utils.isStreamReset(e);
+          if (code != null) {
+            error = this.codeToReason('read', code);
+          } else {
+            error = new errors.ErrorQUICStreamInternal(
+              `stream recv failed due to ${e.message}`,
+              { cause: e },
+            );
+          }
+          this.readableController.error(error);
           this.updateReadableComplete();
           // Return;
         }
@@ -210,7 +261,18 @@ class QUICStream {
       try {
         this.connection.connection.streamSend(this.id, Buffer.alloc(0), false);
       } catch (e) {
-        this.writableController.error(e);
+        this.streamEvents$.next(StreamState.WritableErrored);
+        let error: Error;
+        const code = utils.isStreamStopped(e);
+        if (code != null) {
+          error = this.codeToReason('write', code);
+        } else {
+          error = new errors.ErrorQUICStreamInternal(
+            `stream send failed due to ${e.message}`,
+            { cause: e },
+          );
+        }
+        this.writableController.error(error);
         this.updateWritableComplete();
       }
     });
@@ -283,8 +345,7 @@ class QUICStream {
 
   public kill() {
     this.streamEvents$.next(StreamState.Killed);
-    // TODO: proper error.
-    const error = new Error('Stream killed');
+    const error = new errors.ErrorQUICStreamKilled();
     // Handle killing the writable stream
     if (!this._writableComplete) {
       this.writableController.error(error);
@@ -295,9 +356,7 @@ class QUICStream {
       this.readableController.error(error);
       this.readableCancel();
       if (this.connection.isDraining || this.connection.isClosed) {
-        // TODO: proper error.
         this.streamEvents$.next(StreamState.ReadableErrored);
-        this.readableController.error(new Error('Stream finished'));
         this.updateReadableComplete();
       }
     }

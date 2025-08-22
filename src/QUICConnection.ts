@@ -1,4 +1,6 @@
 import type { Connection, RecvInfo } from './native/index.js';
+import type * as nativeTypes from './native/types.js';
+import type Logger from '@matrixai/logger';
 import type {
   ConnectionIdString,
   Host,
@@ -6,10 +8,10 @@ import type {
   QUICConfig,
   RemoteInfo,
   SendData,
+  StreamCodeToReason,
   StreamId,
+  StreamReasonToCode,
 } from './types.js';
-import type * as nativeTypes from './native/types.js';
-import type Logger from '@matrixai/logger';
 import { firstValueFrom, ReplaySubject, Subject } from 'rxjs';
 import { CryptoError, quiche, Shutdown } from './native/index.js';
 import { ConnectionType } from './types.js';
@@ -23,8 +25,6 @@ const LOG_STAGES = false;
 const LOG_STATE_CHAGES = false;
 
 class QUICConnection {
-  // TODO: define static constructors here;
-
   static connectionConnect({
     serverName,
     scid,
@@ -33,6 +33,8 @@ class QUICConnection {
     sourcePort,
     host,
     port,
+    codeToReason,
+    reasonToCode,
     logger,
   }: {
     serverName?: string;
@@ -42,6 +44,8 @@ class QUICConnection {
     sourcePort: Port;
     host: Host;
     port: Port;
+    codeToReason?: StreamCodeToReason;
+    reasonToCode?: StreamCodeToReason;
     logger: Logger;
   }): QUICConnection {
     // Doing checks.
@@ -77,7 +81,7 @@ class QUICConnection {
     if (config.logKeys != null) {
       connection!.setKeylog(config.logKeys);
     }
-    const quicConnection = new this(
+    return new this(
       ConnectionType.CLIENT,
       connection,
       config,
@@ -85,9 +89,10 @@ class QUICConnection {
       sourcePort,
       host,
       port,
+      codeToReason,
+      reasonToCode,
       logger,
     );
-    return quicConnection;
   }
 
   static connectionAccept({
@@ -98,6 +103,8 @@ class QUICConnection {
     sourcePort,
     host,
     port,
+    codeToReason,
+    reasonToCode,
     logger,
   }: {
     serverName?: string;
@@ -108,6 +115,8 @@ class QUICConnection {
     sourcePort: Port;
     host: Host;
     port: Port;
+    codeToReason?: StreamCodeToReason;
+    reasonToCode?: StreamCodeToReason;
     logger: Logger;
   }) {
     // Doing checks.
@@ -138,7 +147,7 @@ class QUICConnection {
     if (config.logKeys != null) {
       connection!.setKeylog(config.logKeys);
     }
-    const quicConnection = new this(
+    return new this(
       ConnectionType.SERVER,
       connection,
       config,
@@ -146,14 +155,14 @@ class QUICConnection {
       sourcePort,
       host,
       port,
+      codeToReason,
+      reasonToCode,
       logger,
     );
-    return quicConnection;
   }
 
-  // TODO: define observables here
   public readonly error$: Subject<Error> = new Subject();
-  // A send event must be emmitted after the following
+  // A send event must be emitted after the following
   //  - when a recv is processed
   //  - After a timeout event when `onTimeout()` is called
   //  - When the application interacts with the streams
@@ -171,7 +180,6 @@ class QUICConnection {
   protected caDERs: Array<Uint8Array> = [];
 
   protected rejectStreams: boolean = false;
-  s;
 
   // Sets everything up
   public constructor(
@@ -182,6 +190,8 @@ class QUICConnection {
     public readonly sourcePort: Port,
     public readonly host: Host,
     public readonly port: Port,
+    protected codeToReason: StreamCodeToReason | undefined,
+    protected reasonToCode: StreamReasonToCode | undefined,
     protected logger: Logger,
   ) {
     if (config.cert != null) {
@@ -285,7 +295,6 @@ class QUICConnection {
   /**
    * This just shoves data into the underlying connection instance and triggers observable events
    */
-  // TODO: define simple recv
   public recv(data: Uint8Array, remoteInfo: RemoteInfo) {
     if (LOG_STAGES) this.logger.warn(`!----- Processing recv -----!`);
     const recvInfo: RecvInfo = {
@@ -350,7 +359,6 @@ class QUICConnection {
     if (LOG_STAGES) this.logger.warn(`!----- ProcessSend done -----!`);
   }
 
-  // TODO: define simple state checks
   protected checkState(): void {
     if (LOG_STAGES) this.logger.warn(`!----- checkState -----!`);
     this.checkTimeout();
@@ -514,7 +522,6 @@ class QUICConnection {
     return this.streamMap.size;
   }
 
-  // TODO: we need some method to end streams
   public async endStreams(force: boolean): Promise<void> {
     // Prevent new streams from being created
     this.rejectStreams = true;
@@ -543,9 +550,6 @@ class QUICConnection {
   }
 
   // Stream related methods
-  // TODO: we need a stream map for tracking existing streams
-  // TODO: we need a stream ID tracker for avoiding used streamIds, assuming this is actually a problem
-  // TODO: time to update quiche
 
   /**
    * Client initiated bidirectional stream starts at 0.
@@ -595,7 +599,12 @@ class QUICConnection {
         if (LOG_STATE_CHAGES) {
           this.logger.warn(`creating new stream for ${streamId} on writable`);
         }
-        quicStream = new QUICStream(streamId, this);
+        quicStream = new QUICStream(
+          streamId,
+          this,
+          this.codeToReason,
+          this.reasonToCode,
+        );
         this.setupQuicStream(quicStream);
         this.stream$.next(quicStream);
       }
@@ -612,7 +621,12 @@ class QUICConnection {
         if (LOG_STATE_CHAGES) {
           this.logger.warn(`creating new stream for ${streamId} on readable`);
         }
-        quicStream = new QUICStream(streamId, this);
+        quicStream = new QUICStream(
+          streamId,
+          this,
+          this.codeToReason,
+          this.reasonToCode,
+        );
         this.setupQuicStream(quicStream);
         this.stream$.next(quicStream);
       }
@@ -622,7 +636,6 @@ class QUICConnection {
   }
 
   protected rejectStream(streamId: StreamId): void {
-    this.logger.warn(`rejecting stream ${streamId}`);
     // TODO: use a configured error code
     this.connection.streamShutdown(streamId, Shutdown.Read, 1);
     this.connection.streamShutdown(streamId, Shutdown.Write, 1);
@@ -633,8 +646,7 @@ class QUICConnection {
    */
   public newStream(type: 'bidi' | 'uni' = 'bidi'): QUICStream {
     if (this.rejectStreams) {
-      // FIXME
-      throw Error('TMP IMP Cannot create new stream');
+      throw new errors.ErrorQUICConnectionDraining();
     }
     let streamId: StreamId;
     if (this.type === ConnectionType.CLIENT && type === 'bidi') {
@@ -650,7 +662,12 @@ class QUICConnection {
       streamId = this.streamIdServerUni;
       this.streamIdServerUni += this.streamIdStep;
     }
-    const quicStream = new QUICStream(streamId!, this);
+    const quicStream = new QUICStream(
+      streamId!,
+      this,
+      this.codeToReason,
+      this.reasonToCode,
+    );
     this.setupQuicStream(quicStream);
     const result = this.connection.streamSend(
       quicStream.id,

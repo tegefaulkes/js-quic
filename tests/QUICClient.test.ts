@@ -689,7 +689,6 @@ describe(QUICClient.name, () => {
     ).rejects.toThrow(errors.ErrorQUICClientInvalidArgument);
   });
 
-
   // Describe('handles random packets', () => {
   //   test.prop(
   //     [
