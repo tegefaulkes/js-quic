@@ -105,6 +105,8 @@ class QUICClient {
       resolveHostname = utils.resolveHostname,
       reuseAddr,
       ipv6Only,
+      reasonToCode,
+      codeToReason,
       logger = new Logger(`${this.name}`),
     }: {
       host: string;
@@ -118,6 +120,8 @@ class QUICClient {
       resolveHostname?: ResolveHostname;
       reuseAddr?: boolean;
       ipv6Only?: boolean;
+      reasonToCode?: StreamReasonToCode;
+      codeToReason?: StreamCodeToReason;
       logger?: Logger;
     },
     abortObservable?: Observable<unknown>,
@@ -193,7 +197,9 @@ class QUICClient {
         sourcePort: socket.port,
         host: host_,
         port: port_,
-        logger: logger.getChild('connection'),
+        reasonToCode,
+        codeToReason,
+        logger: logger.getChild('QUICConnection'),
       });
     } catch (e) {
       if (!isSocketShared) {

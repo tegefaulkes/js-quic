@@ -1,13 +1,18 @@
-import type { ClientCryptoOps, ServerCryptoOps } from '#types.js';
+import type {
+  ClientCryptoOps,
+  ServerCryptoOps,
+  StreamCodeToReason,
+  StreamReasonToCode,
+} from '#types.js';
 import type { TLSConfigs } from './utils.js';
 import type QUICConnection from '#QUICConnection.js';
 import type { Subject } from 'rxjs';
 import Logger, { formatting, LogLevel, StreamHandler } from '@matrixai/logger';
 import { test } from '@fast-check/jest';
 import { firstValueFrom } from 'rxjs';
+import { sleep } from './utils.js';
 import * as testsUtils from './utils.js';
 import { generateTLSConfig } from './utils.js';
-import { Step } from '#QUICConnection.js';
 import QUICServer from '#QUICServer.js';
 import QUICClient from '#QUICClient.js';
 import QUICStream from '#QUICStream.js';
@@ -49,28 +54,43 @@ describe('QUICStream', () => {
   };
   let socketCleanMethods: ReturnType<typeof testsUtils.socketCleanupFactory>;
 
-  let tlsConfig: TLSConfigs;
+  let serverTlsConfig: TLSConfigs;
   let server: QUICServer;
   let serverConnection: QUICConnection;
+  let clientTlsConfig: TLSConfigs;
   let client: QUICClient;
   let clientConnection: QUICConnection;
+
+  const reasonSymbol = Symbol('reasonSymbol');
+  const codeToReason: StreamCodeToReason = (type, code) => {
+    if (code === 100) return reasonSymbol;
+    else return new Error(`${type.toString()} ${code.toString()}`);
+  };
+  const reasonToCode: StreamReasonToCode = (_type, reason) => {
+    if (reason === reasonSymbol) return 100;
+    else return 1;
+  };
 
   // We need to test the stream-making
   beforeEach(async () => {
     key = await testsUtils.generateKeyHMAC();
     socketCleanMethods = testsUtils.socketCleanupFactory();
 
-    tlsConfig = await generateTLSConfig(defaultType);
+    serverTlsConfig = await generateTLSConfig(defaultType);
+    clientTlsConfig = await generateTLSConfig(defaultType);
     server = new QUICServer({
       crypto: {
         key,
         ops: serverCrypto,
       },
+      codeToReason,
+      reasonToCode,
       logger: loggerServer.getChild(QUICServer.name),
       config: {
-        key: tlsConfig.leafKeyPairPEM.privateKey,
-        cert: tlsConfig.leafCertPEM,
-        verifyPeer: false,
+        key: serverTlsConfig.leafKeyPairPEM.privateKey,
+        cert: serverTlsConfig.leafCertPEM,
+        ca: clientTlsConfig.caCertPEM,
+        verifyPeer: true,
         maxIdleTimeout: 1000,
       },
     });
@@ -88,9 +108,14 @@ describe('QUICStream', () => {
       crypto: {
         ops: clientCrypto,
       },
+      codeToReason,
+      reasonToCode,
       logger: loggerClient.getChild(QUICClient.name),
       config: {
-        verifyPeer: false,
+        key: clientTlsConfig.leafKeyPairPEM.privateKey,
+        cert: clientTlsConfig.leafCertPEM,
+        ca: serverTlsConfig.caCertPEM,
+        verifyPeer: true,
         maxIdleTimeout: 1000,
       },
     });
@@ -106,7 +131,6 @@ describe('QUICStream', () => {
     await socketCleanMethods.stopSockets();
   });
 
-  // Easy paths
   test('should create a stream on client', async () => {
     // Note that no stream is created on the server side unless a message is sent.
     // Can create a stream
@@ -285,8 +309,6 @@ describe('QUICStream', () => {
       expect(result).toBe(message.toString());
     }
   });
-
-  // Problem paths
   test('should handle writeable stream abort with data sent', async () => {
     const serverStreamP = firstValueFrom(serverConnection.stream$);
     const clientStream = clientConnection.newStream();
@@ -353,7 +375,6 @@ describe('QUICStream', () => {
   });
   // It's not possible to cancel the readable stream before data is sent
   //  because we need data to be sent to create the stream in the first place.
-
   test('stream should complete after kill', async () => {
     const serverStreamP = firstValueFrom(serverConnection.stream$);
     const clientStream = clientConnection.newStream();
@@ -463,7 +484,6 @@ describe('QUICStream', () => {
     serverStream.kill();
     serverStream.kill();
   });
-
   test('should gracefully drain a connection of streams', async () => {
     const streams: Array<QUICStream> = [];
     const serverStreamP = firstValueFrom(serverConnection.stream$);
@@ -484,9 +504,14 @@ describe('QUICStream', () => {
     const streamsCloseP = Promise.all(
       streams.map(async (stream) => {
         await stream.writable.close();
-        for await (const _chunk of stream.readable) {
-          // Just consume the stream data
+        try {
+          for await (const _chunk of stream.readable) {
+            // Just consume the stream data
+          }
+        } catch {
+          // Ignore error
         }
+
         await firstValueFrom(stream.complete$);
       }),
     );
@@ -506,7 +531,6 @@ describe('QUICStream', () => {
     await firstValueFrom(newServerStream.readableComplete$);
     await firstValueFrom(newServerStream.complete$);
   });
-
   test('calling clientConnection.endStreams should clean up streams', async () => {
     const streams: Array<QUICStream> = [];
     const serverStreamP = firstValueFrom(serverConnection.stream$);
@@ -625,7 +649,6 @@ describe('QUICStream', () => {
     await streamsCloseP;
     expect(clientConnection.openStreams).toBe(0);
   });
-
   describe('stream completion tests', () => {
     // Here we have a bunch of ways the forward and reverse streams can end. They can end gracefully
     //  with a writable close. Alternatively, the streams can be errored with a writable abort or a
@@ -690,7 +713,6 @@ describe('QUICStream', () => {
       // Canceled readable will just complete
       await consumeReadable(serverStream);
     });
-
     // Testing concurrent stream completion from both ends
     test('should complete with FWC-FRC', async () => {
       const serverStreamP = firstValueFrom(serverConnection.stream$);
@@ -726,7 +748,6 @@ describe('QUICStream', () => {
       await firstValueFrom(serverStream.readableComplete$);
       await firstValueFrom(clientStream.writableComplete$);
     });
-
     // Both forward and reverse streams completing should trigger QUICStream completion
     test('should fully complete with FWC, RWC', async () => {
       const serverStreamP = firstValueFrom(serverConnection.stream$);
@@ -750,7 +771,6 @@ describe('QUICStream', () => {
       await firstValueFrom(serverStream.readableComplete$);
       await firstValueFrom(serverStream.complete$);
     });
-
     test('should fully complete with FWA, RWC', async () => {
       const serverStreamP = firstValueFrom(serverConnection.stream$);
       const clientStream = clientConnection.newStream();
@@ -954,7 +974,6 @@ describe('QUICStream', () => {
       await firstValueFrom(serverStream.complete$);
     });
   });
-
   test('stream completion should complete all observables', async () => {
     const serverStreamP = firstValueFrom(serverConnection.stream$);
     const clientStream = clientConnection.newStream();
@@ -996,7 +1015,6 @@ describe('QUICStream', () => {
     await completionProm(serverStream.writableComplete$);
     await completionProm(serverStream.complete$);
   });
-
   test('should clean up streams if connection times out', async () => {
     const serverStreamP = firstValueFrom(serverConnection.stream$);
     const clientStream = clientConnection.newStream();
@@ -1025,14 +1043,155 @@ describe('QUICStream', () => {
     await firstValueFrom(serverStream.readableComplete$);
     await firstValueFrom(serverStream.complete$);
   });
-  test.todo('streams should contain metadata');
-  test.todo('connection can be forced closed after unforced close');
-  test.todo(
-    'connections handle packets failing to send and gracefully timeout',
-  );
-  test.todo('should throw stream limit error when limit is reached');
-  test.todo('ended streams do not contribute to limit');
-  test.todo('test custom code to reason');
-  test.todo('test unidirectional streams');
+  test('should clean up streams if connection closes without warning', async () => {
+    const serverStreamP = firstValueFrom(serverConnection.stream$);
+    const clientStream = clientConnection.newStream();
+    const clientWriter = clientStream.writable.getWriter();
+    // Writing a message should trigger the stream creation on the server side.
+    await clientWriter.write(Buffer.from('message'));
+    const serverStream = await serverStreamP;
+    // Force connection close
+    clientConnection.kill({
+      isApp: true,
+      errorCode: 1,
+      reason: Buffer.from('some reason'),
+    });
 
+    await firstValueFrom(serverConnection.closed$);
+    await firstValueFrom(clientConnection.closed$);
+
+    await expect(consumeReadable(serverStream)).rejects.toThrow(
+      errors.ErrorQUICConnectionClosed,
+    );
+    await expect(consumeReadable(clientStream)).rejects.toThrow(
+      errors.ErrorQUICConnectionClosed,
+    );
+
+    await firstValueFrom(clientStream.writableComplete$);
+    await firstValueFrom(clientStream.readableComplete$);
+    await firstValueFrom(clientStream.complete$);
+    await firstValueFrom(serverStream.writableComplete$);
+    await firstValueFrom(serverStream.readableComplete$);
+    await firstValueFrom(serverStream.complete$);
+  });
+  test('streams should contain metadata', async () => {
+    const serverStreamP = firstValueFrom(serverConnection.stream$);
+    const clientStream = clientConnection.newStream();
+    const clientWriter = clientStream.writable.getWriter();
+    // Writing a message should trigger the stream creation on the server side.
+    await clientWriter.write(Buffer.from('message'));
+    const serverStream = await serverStreamP;
+
+    expect(clientStream.sourceHost).toBe(localhost);
+    expect(clientStream.sourcePort).toBe(serverConnection.port);
+    expect(clientStream.host).toBe(localhost);
+    expect(clientStream.port).toBe(serverConnection.sourcePort);
+    expect(utils.derToPEM(clientStream.remoteCertChain![0])).toBe(
+      serverTlsConfig.leafCertPEM,
+    );
+
+    await firstValueFrom(serverConnection.peerCertChain$);
+    expect(serverStream.sourceHost).toBe(localhost);
+    expect(serverStream.sourcePort).toBe(clientConnection.port);
+    expect(serverStream.host).toBe(localhost);
+    expect(serverStream.port).toBe(clientConnection.sourcePort);
+    expect(utils.derToPEM(serverStream.remoteCertChain![0])).toBe(
+      clientTlsConfig.leafCertPEM,
+    );
+  });
+  test('connection can be forced closed after unforced close', async () => {
+    const serverStreamP = firstValueFrom(serverConnection.stream$);
+    const clientStream = clientConnection.newStream();
+    const clientWriter = clientStream.writable.getWriter();
+    // Writing a message should trigger the stream creation on the server side.
+    await clientWriter.write(Buffer.from('message'));
+    const serverStream = await serverStreamP;
+
+    const endStreamsP = clientConnection.endStreams(false);
+    await sleep(100);
+    expect(clientStream.isComplete).toBeFalse();
+    expect(serverStream.isComplete).toBeFalse();
+    void clientConnection.endStreams(true);
+    await endStreamsP;
+
+    await firstValueFrom(serverConnection.timedOut$);
+    await firstValueFrom(clientConnection.timedOut$);
+
+    await expect(consumeReadable(serverStream)).rejects.toThrow('read 1');
+    await expect(consumeReadable(clientStream)).rejects.toThrow(
+      errors.ErrorQUICStreamKilled,
+    );
+
+    await firstValueFrom(clientStream.writableComplete$);
+    await firstValueFrom(clientStream.readableComplete$);
+    await firstValueFrom(clientStream.complete$);
+    await firstValueFrom(serverStream.writableComplete$);
+    await firstValueFrom(serverStream.readableComplete$);
+    await firstValueFrom(serverStream.complete$);
+  });
+  test('should throw stream limit error when limit is reached', async () => {
+    // Stream limit is 100
+    for (let i = 0; i < 100; i++) {
+      clientConnection.newStream();
+    }
+    expect(() => clientConnection.newStream()).toThrow(
+      errors.ErrorQUICStreamLimit,
+    );
+  });
+  test('ended streams do not contribute to limit', async () => {
+    // Stream limit is 100
+    const serverStreams: Array<Promise<void>> = [];
+    serverConnection.stream$.subscribe((stream) => {
+      serverStreams.push(firstValueFrom(stream.complete$));
+    });
+    const clientStreams: Array<Promise<void>> = [];
+    const { p: waitP, resolveP } = utils.promise<void>();
+    for (let i = 0; i < 100; i++) {
+      const clientStream = clientConnection.newStream();
+      clientStreams.push(
+        (async () => {
+          await waitP;
+          clientStream.kill();
+          await firstValueFrom(clientStream.complete$);
+        })(),
+      );
+    }
+
+    resolveP();
+    expect(clientConnection.connection.peerStreamsLeftBidi()).toBe(0);
+    await Promise.all(clientStreams);
+    await Promise.all(serverStreams);
+    // Wait for streams to be cleaned up
+    await sleep(100);
+    expect(clientConnection.connection.peerStreamsLeftBidi()).toBe(100);
+  });
+  test('test custom code to reason', async () => {
+    const serverStreamP = firstValueFrom(serverConnection.stream$);
+    const clientStream = clientConnection.newStream();
+    const clientWriter = clientStream.writable.getWriter();
+    // Writing a message should trigger the stream creation on the server side.
+    await clientWriter.write(Buffer.from('message'));
+    const serverStream = await serverStreamP;
+    // @ts-ignore: using a symbol for the test here
+    serverStream.kill(reasonSymbol);
+
+    await expect(consumeReadable(serverStream)).rejects.toBe(
+      // @ts-ignore: using a symbol for the test here
+      reasonSymbol,
+    );
+    await expect(consumeReadable(clientStream)).rejects.toBe(
+      // @ts-ignore: using a symbol for the test here
+      reasonSymbol,
+    );
+
+    await firstValueFrom(clientStream.writableComplete$);
+    await firstValueFrom(clientStream.readableComplete$);
+    await firstValueFrom(clientStream.complete$);
+    await firstValueFrom(serverStream.writableComplete$);
+    await firstValueFrom(serverStream.readableComplete$);
+    await firstValueFrom(serverStream.complete$);
+  });
+  // TODO: implement uni stream handling.
+  //  The only difference is one of the streams starts closed when the stream is created.
+  test.todo('test unidirectional streams');
 });

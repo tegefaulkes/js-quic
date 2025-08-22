@@ -221,8 +221,13 @@ class QUICConnection {
       const caPEMs = utils.collectPEMs(this.config.ca);
       this.caDERs = caPEMs.map(utils.pemToDER);
     }
-    this.timedOut$.subscribe(() => {
-      void this.endStreams(true, new errors.ErrorQUICConnectionIdleTimeout());
+    this.closed$.subscribe(() => {
+      if (this.isTimedOut_) {
+        void this.endStreams(true, new errors.ErrorQUICConnectionIdleTimeout());
+        return;
+      }
+      void this.endStreams(true, new errors.ErrorQUICConnectionClosed());
+      return;
     });
   }
 
@@ -252,7 +257,19 @@ class QUICConnection {
     return [sourceId, destinationId].sort().join('-');
   }
 
-  // TODO: getters for host and port
+  /**
+   * Array of independent CA certificates in DER format.
+   */
+  public get getLocalCACertsChain(): Array<Uint8Array> {
+    return this.caDERs;
+  }
+
+  /**
+   * Chain of local certificates from leaf to root in DER format.
+   */
+  public get getLocalCertsChain(): Array<Uint8Array> {
+    return this.certDERs;
+  }
 
   public get closed() {
     return this.connection.isClosed();
@@ -333,11 +350,11 @@ class QUICConnection {
     void this.isInEarlyData;
     void this.isReadable;
     void this.isDraining;
-    void this.isClosed;
     void this.isTimedOut;
     void this.peerError;
     void this.localError;
     void this.peerCertChain;
+    void this.isClosed;
     this.step$.next(Step.StateEnd);
   }
 
@@ -460,13 +477,14 @@ class QUICConnection {
     return value;
   }
 
-  protected peerCertChain_: Array<string> | undefined = undefined;
-  public readonly peerCertChain$: ReplaySubject<Array<string>> =
+  protected peerCertChain_: Array<Uint8Array> | undefined = undefined;
+  public readonly peerCertChain$: ReplaySubject<Array<Uint8Array>> =
     new ReplaySubject(1);
-  public get peerCertChain() {
+  // Get peer cert chain in DER format
+  public get peerCertChain(): Array<Uint8Array> | undefined {
     const value = this.connection.peerCertChain();
     if (this.peerCertChain_ == null && value != null) {
-      this.peerCertChain_ = value.map((v) => Buffer.from(v).toString('utf-8'));
+      this.peerCertChain_ = value;
       this.peerCertChain$.next(this.peerCertChain_);
     }
     return this.peerCertChain_;
@@ -485,7 +503,7 @@ class QUICConnection {
       streams.push(firstValueFrom(stream.complete$));
 
       // If forced, then we need to trigger the stream to end
-      if (force != null) stream.kill(reason);
+      if (force) stream.kill(reason);
     }
     await Promise.all(streams);
   }
@@ -623,6 +641,12 @@ class QUICConnection {
       streamId = this.streamIdServerUni;
       this.streamIdServerUni += this.streamIdStep;
     }
+    try {
+      this.connection.streamSend(streamId!, Buffer.alloc(0), false);
+    } catch (e) {
+      if (e.message === 'StreamLimit') throw new errors.ErrorQUICStreamLimit();
+      throw e;
+    }
     const quicStream = new QUICStream(
       streamId!,
       this,
@@ -630,7 +654,6 @@ class QUICConnection {
       this.reasonToCode,
     );
     this.setupQuicStream(quicStream);
-    this.connection.streamSend(quicStream.id, Buffer.alloc(0), false);
     this.processSend();
     return quicStream;
   }

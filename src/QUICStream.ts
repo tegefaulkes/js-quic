@@ -1,5 +1,10 @@
 import type QUICConnection from './QUICConnection.js';
-import type { StreamCodeToReason, StreamReasonToCode } from './types.js';
+import type {
+  Host,
+  Port,
+  StreamCodeToReason,
+  StreamReasonToCode,
+} from './types.js';
 import { WritableStream, ReadableStream } from 'stream/web';
 import { firstValueFrom, ReplaySubject, Subject } from 'rxjs';
 import * as utils from './utils.js';
@@ -317,6 +322,38 @@ class QUICStream {
     return this._writableComplete;
   }
   get complete() {
+    return this._complete;
+  }
+
+  get sourceHost(): Host {
+    return this.connection.sourceHost;
+  }
+
+  get sourcePort(): Port {
+    return this.connection.sourcePort;
+  }
+
+  get host(): Host {
+    return this.connection.host;
+  }
+
+  get port(): Port {
+    return this.connection.port;
+  }
+
+  get remoteCertChain(): Array<Uint8Array> | undefined {
+    return this.connection.peerCertChain;
+  }
+
+  get isReadableComplete() {
+    return this._readableComplete;
+  }
+
+  get isWritableComplete() {
+    return this._writableComplete;
+  }
+
+  get isComplete() {
     return this._complete;
   }
 
