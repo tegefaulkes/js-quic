@@ -369,7 +369,10 @@ class QUICServer {
     for (const connection of this.socket.connectionMap.serverConnections.values()) {
       stopConnectionPs.push(
         (async () => {
-          await connection.endStreams(force);
+          await connection.endStreams(
+            force,
+            new errors.ErrorQUICServerStopping(),
+          );
           connection.kill({ isApp, errorCode, reason });
           await firstValueFrom(connection.closed$, { defaultValue: undefined });
         })(),

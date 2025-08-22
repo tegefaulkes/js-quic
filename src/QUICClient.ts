@@ -447,8 +447,10 @@ class QUICClient {
     //  2. Wait for the connection to close
     //  3. If shared clean up socket
     //  4. clean up all plumbing
-
-    await this.connection.endStreams(force);
+    await this.connection.endStreams(
+      force,
+      new errors.ErrorQUICClientDestroyed(),
+    );
 
     // Killing connection if it is not already closed or draining
     if (!this.connection.isClosed && !this.connection.isDraining) {

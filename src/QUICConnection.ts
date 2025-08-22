@@ -221,6 +221,9 @@ class QUICConnection {
       const caPEMs = utils.collectPEMs(this.config.ca);
       this.caDERs = caPEMs.map(utils.pemToDER);
     }
+    this.timedOut$.subscribe(() => {
+      void this.endStreams(true, new errors.ErrorQUICConnectionIdleTimeout());
+    });
   }
 
   public get connectionId_(): QUICConnectionId {
@@ -339,7 +342,7 @@ class QUICConnection {
   }
 
   protected timeoutTimer: NodeJS.Timeout | undefined;
-  protected timeout$: Subject<void> = new Subject();
+  public readonly timeout$: Subject<void> = new Subject();
   protected handleTimeout = () => {
     this.connection.onTimeout();
     this.timeout$.next();
@@ -473,7 +476,7 @@ class QUICConnection {
     return this.streamMap.size;
   }
 
-  public async endStreams(force: boolean): Promise<void> {
+  public async endStreams(force: boolean, reason?: Error): Promise<void> {
     // Prevent new streams from being created
     this.rejectStreams = true;
     // Wait for all streams to end
@@ -482,7 +485,7 @@ class QUICConnection {
       streams.push(firstValueFrom(stream.complete$));
 
       // If forced, then we need to trigger the stream to end
-      if (force) stream.kill();
+      if (force != null) stream.kill(reason);
     }
     await Promise.all(streams);
   }

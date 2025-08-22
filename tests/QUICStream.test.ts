@@ -7,6 +7,7 @@ import { test } from '@fast-check/jest';
 import { firstValueFrom } from 'rxjs';
 import * as testsUtils from './utils.js';
 import { generateTLSConfig } from './utils.js';
+import { Step } from '#QUICConnection.js';
 import QUICServer from '#QUICServer.js';
 import QUICClient from '#QUICClient.js';
 import QUICStream from '#QUICStream.js';
@@ -20,7 +21,7 @@ async function consumeReadable(stream: QUICStream) {
 }
 
 describe('QUICStream', () => {
-  const _logger = new Logger(`QUICStream Test`, LogLevel.SILENT, [
+  const _logger = new Logger(`QUICStream Test`, LogLevel.WARN, [
     new StreamHandler(
       formatting.format`${formatting.level}:${formatting.keys}:${formatting.msg}`,
     ),
@@ -70,6 +71,7 @@ describe('QUICStream', () => {
         key: tlsConfig.leafKeyPairPEM.privateKey,
         cert: tlsConfig.leafCertPEM,
         verifyPeer: false,
+        maxIdleTimeout: 1000,
       },
     });
     socketCleanMethods.extractSocket(server);
@@ -89,6 +91,7 @@ describe('QUICStream', () => {
       logger: loggerClient.getChild(QUICClient.name),
       config: {
         verifyPeer: false,
+        maxIdleTimeout: 1000,
       },
     });
     socketCleanMethods.extractSocket(client);
@@ -994,7 +997,34 @@ describe('QUICStream', () => {
     await completionProm(serverStream.complete$);
   });
 
-  test.todo('should clean up streams if connection times out');
+  test('should clean up streams if connection times out', async () => {
+    const serverStreamP = firstValueFrom(serverConnection.stream$);
+    const clientStream = clientConnection.newStream();
+    const clientWriter = clientStream.writable.getWriter();
+    // Writing a message should trigger the stream creation on the server side.
+    await clientWriter.write(Buffer.from('message'));
+    const serverStream = await serverStreamP;
+    // Force packet loss
+    serverConnection.send$.complete();
+    clientConnection.send$.complete();
+
+    await firstValueFrom(serverConnection.timedOut$);
+    await firstValueFrom(clientConnection.timedOut$);
+
+    await expect(consumeReadable(serverStream)).rejects.toThrow(
+      errors.ErrorQUICConnectionIdleTimeout,
+    );
+    await expect(consumeReadable(clientStream)).rejects.toThrow(
+      errors.ErrorQUICConnectionIdleTimeout,
+    );
+
+    await firstValueFrom(clientStream.writableComplete$);
+    await firstValueFrom(clientStream.readableComplete$);
+    await firstValueFrom(clientStream.complete$);
+    await firstValueFrom(serverStream.writableComplete$);
+    await firstValueFrom(serverStream.readableComplete$);
+    await firstValueFrom(serverStream.complete$);
+  });
   test.todo('streams should contain metadata');
   test.todo('connection can be forced closed after unforced close');
   test.todo(
@@ -1004,4 +1034,5 @@ describe('QUICStream', () => {
   test.todo('ended streams do not contribute to limit');
   test.todo('test custom code to reason');
   test.todo('test unidirectional streams');
+
 });

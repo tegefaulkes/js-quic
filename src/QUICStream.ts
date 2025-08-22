@@ -342,18 +342,17 @@ class QUICStream {
     }
   }
 
-  public kill() {
+  public kill(reason: Error = new errors.ErrorQUICStreamKilled()) {
     this.streamEvents$.next(StreamState.Killed);
-    const error = new errors.ErrorQUICStreamKilled();
     // Handle killing the writable stream
     if (!this._writableComplete) {
-      this.writableController.error(error);
-      this.writableAbort();
+      this.writableController.error(reason);
+      this.writableAbort(reason);
     }
     // Handle killing the readable stream
     if (!this._readableComplete) {
-      this.readableController.error(error);
-      this.readableCancel();
+      this.readableController.error(reason);
+      this.readableCancel(reason);
       if (this.connection.isDraining || this.connection.isClosed) {
         this.streamEvents$.next(StreamState.ReadableErrored);
         this.updateReadableComplete();
