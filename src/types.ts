@@ -360,6 +360,13 @@ type SendData = {
   at: QuicheTimeInstant;
 };
 
+const CLIENT_BIDI_ID = 0b00;
+const SERVER_BIDI_ID = 0b01;
+const CLIENT_UNI_ID = 0b10;
+const SERVER_UNI_ID = 0b11;
+
+export { CLIENT_BIDI_ID, SERVER_BIDI_ID, CLIENT_UNI_ID, SERVER_UNI_ID };
+
 export type {
   POJO,
   Opaque,

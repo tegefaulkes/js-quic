@@ -3,10 +3,13 @@ import type {
   Host,
   Port,
   StreamCodeToReason,
+  StreamId,
   StreamReasonToCode,
 } from './types.js';
 import { WritableStream, ReadableStream } from 'stream/web';
 import { firstValueFrom, ReplaySubject, Subject } from 'rxjs';
+import { CLIENT_BIDI_ID, SERVER_BIDI_ID } from './types.js';
+import { CLIENT_UNI_ID, ConnectionType, SERVER_UNI_ID } from './types.js';
 import * as utils from './utils.js';
 import * as errors from './errors.js';
 import { Shutdown } from './native/index.js';
@@ -207,79 +210,139 @@ class QUICStream {
     });
   };
 
+  /**
+   * Constructs the writableStream depending on the connection type and id.
+   * If the stream is unidirectional, then the writable stream is created when
+   * the ConnectionType and Initiator match
+   */
+  protected setupWritable(
+    type: ConnectionType,
+    id: StreamId,
+  ): WritableStream<Buffer> {
+    const isClientInitOnClient =
+      type === ConnectionType.CLIENT && id % 4 === CLIENT_UNI_ID;
+    const isServerInitOnServer =
+      type === ConnectionType.SERVER && id % 4 === SERVER_UNI_ID;
+    const isBidirectional =
+      id % 4 === CLIENT_BIDI_ID || id % 4 === SERVER_BIDI_ID;
+    if (isClientInitOnClient || isServerInitOnServer || isBidirectional) {
+      const writableStream = new WritableStream<Buffer>({
+        start: this.writableStart,
+        write: this.writableWrite,
+        close: this.writableClose,
+        abort: this.writableAbort,
+      });
+      this.writeReady$.subscribe(() => {
+        try {
+          this.connection.connection.streamSend(
+            this.id,
+            Buffer.alloc(0),
+            false,
+          );
+        } catch (e) {
+          this.streamEvents$.next(StreamState.WritableErrored);
+          let error: Error;
+          const code = utils.isStreamStopped(e);
+          if (code != null) {
+            error = this.codeToReason('write', code);
+          } else {
+            error = new errors.ErrorQUICStreamInternal(
+              `stream send failed due to ${e.message}`,
+              { cause: e },
+            );
+          }
+          this.writableController.error(error);
+          this.updateWritableComplete();
+        }
+      });
+      return writableStream;
+    }
+
+    // Otherwise initiate with the writable errored out
+    const writableStream = new WritableStream({
+      start: (controller) => {
+        controller.error(new errors.ErrorQUICStreamUnidirectional());
+      },
+    });
+    this.updateWritableComplete();
+    return writableStream;
+  }
+
+  /**
+   * Constructs the readableStream depending on the connection type and id.
+   * If the stream is unidirectional, then the writable stream is created when
+   * the ConnectionType and Initiator don't match
+   */
+  protected setupReadable(type: ConnectionType, id: StreamId) {
+    const isServerInitOnClient =
+      type === ConnectionType.CLIENT && id % 4 === SERVER_UNI_ID;
+    const isClientInitOnServer =
+      type === ConnectionType.SERVER && id % 4 === CLIENT_UNI_ID;
+    const isBidirectional =
+      id % 4 === CLIENT_BIDI_ID || id % 4 === SERVER_BIDI_ID;
+    if (isServerInitOnClient || isClientInitOnServer || isBidirectional) {
+      const readableStream = new ReadableStream<Buffer>({
+        start: this.readableStart,
+        pull: this.readablePull,
+        cancel: this.readableCancel,
+      });
+      this.readReady$.subscribe(() => {
+        // If the stream is finished here, then it either ended with an error or a 0-len fin packet.
+        // We must do a Recv to work out which is which
+        if (this.isFinished) {
+          // We need to tigger a read and end the readable stream with an error
+          try {
+            const buf = Buffer.alloc(1024);
+            const result = this.connection.connection.streamRecv(this.id, buf);
+            if (result == null) {
+              utils.never('got null result when expecting data');
+            }
+            const [bytesRead, finished] = result;
+            if (!finished || bytesRead > 0) {
+              utils.never('processed data when we just expected a fin frame');
+            }
+            this.streamEvents$.next(StreamState.ReadableFinished);
+            this.readableController.close();
+            this.updateReadableComplete();
+            // Return;
+          } catch (e) {
+            this.streamEvents$.next(StreamState.ReadableErrored);
+            let error: Error;
+            const code = utils.isStreamReset(e);
+            if (code != null) {
+              error = this.codeToReason('read', code);
+            } else {
+              error = new errors.ErrorQUICStreamInternal(
+                `stream recv failed due to ${e.message}`,
+                { cause: e },
+              );
+            }
+            this.readableController.error(error);
+            this.updateReadableComplete();
+            // Return;
+          }
+        }
+      });
+      return readableStream;
+    }
+    // Otherwise initiate with the readable errored out
+    const readableStream = new ReadableStream({
+      start: (controller) => {
+        controller.error(new errors.ErrorQUICStreamUnidirectional());
+      },
+    });
+    this.updateReadableComplete();
+    return readableStream;
+  }
+
   constructor(
     public readonly id: number,
     public readonly connection: QUICConnection,
     protected codeToReason: StreamCodeToReason,
     protected reasonToCode: StreamReasonToCode,
   ) {
-    this.writable = new WritableStream<Buffer>({
-      start: this.writableStart,
-      write: this.writableWrite,
-      close: this.writableClose,
-      abort: this.writableAbort,
-    });
-    this.readable = new ReadableStream<Buffer>({
-      start: this.readableStart,
-      pull: this.readablePull,
-      cancel: this.readableCancel,
-    });
-    this.readReady$.subscribe(() => {
-      // If the stream is finished here, then it either ended with an error or a 0-len fin packet.
-      // We must do a Recv to work out which is which
-      if (this.isFinished) {
-        // We need to tigger a read and end the readable stream with an error
-        try {
-          const buf = Buffer.alloc(1024);
-          const result = this.connection.connection.streamRecv(this.id, buf);
-          if (result == null) {
-            utils.never('got null result when expecting data');
-          }
-          const [bytesRead, finished] = result;
-          if (!finished || bytesRead > 0) {
-            utils.never('processed data when we just expected a fin frame');
-          }
-          this.streamEvents$.next(StreamState.ReadableFinished);
-          this.readableController.close();
-          this.updateReadableComplete();
-          // Return;
-        } catch (e) {
-          this.streamEvents$.next(StreamState.ReadableErrored);
-          let error: Error;
-          const code = utils.isStreamReset(e);
-          if (code != null) {
-            error = this.codeToReason('read', code);
-          } else {
-            error = new errors.ErrorQUICStreamInternal(
-              `stream recv failed due to ${e.message}`,
-              { cause: e },
-            );
-          }
-          this.readableController.error(error);
-          this.updateReadableComplete();
-          // Return;
-        }
-      }
-    });
-    this.writeReady$.subscribe(() => {
-      try {
-        this.connection.connection.streamSend(this.id, Buffer.alloc(0), false);
-      } catch (e) {
-        this.streamEvents$.next(StreamState.WritableErrored);
-        let error: Error;
-        const code = utils.isStreamStopped(e);
-        if (code != null) {
-          error = this.codeToReason('write', code);
-        } else {
-          error = new errors.ErrorQUICStreamInternal(
-            `stream send failed due to ${e.message}`,
-            { cause: e },
-          );
-        }
-        this.writableController.error(error);
-        this.updateWritableComplete();
-      }
-    });
+    this.writable = this.setupWritable(connection.type, id);
+    this.readable = this.setupReadable(connection.type, id);
     this.complete$.subscribe({
       complete: () => {
         // Complete all other subjects since no other updates should happen.

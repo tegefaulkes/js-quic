@@ -299,6 +299,10 @@ class ErrorQUICStreamLimit<T> extends ErrorQUICStream<T> {
   static description = 'QUIC Stream limit has been reached';
 }
 
+class ErrorQUICStreamUnidirectional<T> extends ErrorQUICStream<T> {
+  static description = 'QUIC stream is a unidirectional stream';
+}
+
 export {
   ErrorQUIC,
   ErrorQUICUndefinedBehaviour,
@@ -346,4 +350,5 @@ export {
   ErrorQUICStreamPeerWrite,
   ErrorQUICStreamInternal,
   ErrorQUICStreamLimit,
+  ErrorQUICStreamUnidirectional,
 };

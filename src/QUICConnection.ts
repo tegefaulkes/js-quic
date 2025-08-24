@@ -14,7 +14,13 @@ import type {
 } from './types.js';
 import { firstValueFrom, ReplaySubject, Subject } from 'rxjs';
 import { CryptoError, quiche, Shutdown } from './native/index.js';
-import { ConnectionType } from './types.js';
+import {
+  ConnectionType,
+  CLIENT_BIDI_ID,
+  SERVER_BIDI_ID,
+  CLIENT_UNI_ID,
+  SERVER_UNI_ID,
+} from './types.js';
 import { buildQuicheConfig } from './config.js';
 import * as errors from './errors.js';
 import * as utils from './utils.js';
@@ -527,25 +533,25 @@ class QUICConnection {
    * Client-initiated bidirectional stream starts at 0.
    * Increment by 4 to get the next ID.
    */
-  protected streamIdClientBidi: StreamId = 0b00;
+  protected streamIdClientBidi: StreamId = CLIENT_BIDI_ID;
 
   /**
    * Server initiated bidirectional stream starts at 1.
    * Increment by 4 to get the next ID.
    */
-  protected streamIdServerBidi: StreamId = 0b01;
+  protected streamIdServerBidi: StreamId = SERVER_BIDI_ID;
 
   /**
    * Client initiated unidirectional stream starts at 2.
    * Increment by 4 to get the next ID.
    */
-  protected streamIdClientUni: StreamId = 0b10;
+  protected streamIdClientUni: StreamId = CLIENT_UNI_ID;
 
   /**
    * Server initiated unidirectional stream starts at 3.
    * Increment by 4 to get the next ID.
    */
-  protected streamIdServerUni: StreamId = 0b11;
+  protected streamIdServerUni: StreamId = SERVER_UNI_ID;
 
   /**
    * The step each new stream ID is incremented

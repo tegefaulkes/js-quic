@@ -1191,7 +1191,30 @@ describe('QUICStream', () => {
     await firstValueFrom(serverStream.readableComplete$);
     await firstValueFrom(serverStream.complete$);
   });
-  // TODO: implement uni stream handling.
-  //  The only difference is one of the streams starts closed when the stream is created.
-  test.todo('test unidirectional streams');
+  test('test unidirectional streams', async () => {
+    const serverStreamP = firstValueFrom(serverConnection.stream$);
+    const clientStream = clientConnection.newStream('uni');
+    const clientWriter = clientStream.writable.getWriter();
+    // Writing a message should trigger the stream creation on the server side.
+    await clientWriter.write(Buffer.from('message'));
+    await clientWriter.close();
+    const serverStream = await serverStreamP;
+    await consumeReadable(serverStream);
+
+    // The reverse stream should be errored out if you try to use it
+    await expect(consumeReadable(clientStream)).rejects.toThrow(
+      errors.ErrorQUICStreamUnidirectional,
+    );
+    const serverWriter = serverStream.writable.getWriter();
+    await expect(serverWriter.write(Buffer.from('message'))).rejects.toThrow(
+      errors.ErrorQUICStreamUnidirectional,
+    );
+
+    await firstValueFrom(clientStream.writableComplete$);
+    await firstValueFrom(clientStream.readableComplete$);
+    await firstValueFrom(clientStream.complete$);
+    await firstValueFrom(serverStream.writableComplete$);
+    await firstValueFrom(serverStream.readableComplete$);
+    await firstValueFrom(serverStream.complete$);
+  });
 });
