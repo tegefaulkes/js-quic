@@ -1165,7 +1165,7 @@ describe('QUICStream', () => {
     await sleep(100);
     expect(clientConnection.connection.peerStreamsLeftBidi()).toBe(100);
   });
-  test('test custom code to reason', async () => {
+  test('should use custom code to reason', async () => {
     const serverStreamP = firstValueFrom(serverConnection.stream$);
     const clientStream = clientConnection.newStream();
     const clientWriter = clientStream.writable.getWriter();
@@ -1191,7 +1191,7 @@ describe('QUICStream', () => {
     await firstValueFrom(serverStream.readableComplete$);
     await firstValueFrom(serverStream.complete$);
   });
-  test('test unidirectional streams', async () => {
+  test('should handle unidirectional streams', async () => {
     const serverStreamP = firstValueFrom(serverConnection.stream$);
     const clientStream = clientConnection.newStream('uni');
     const clientWriter = clientStream.writable.getWriter();

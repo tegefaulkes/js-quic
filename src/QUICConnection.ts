@@ -206,6 +206,20 @@ class QUICConnection {
 
   protected rejectStreams: boolean = false;
 
+  /**
+   * Keep alive timer.
+   *
+   * Quiche does not natively ensure activity on the connection. This interval
+   * timer guarantees that there will be activity on the connection by sending
+   * acknowledgement eliciting frames, which will cause the peer to acknowledge.
+   *
+   * This is still useful even if the `config.maxIdleTimeout` is set to 0, which
+   * means the connection will never time out due to being idle.
+   *
+   * This mechanism will only start working after `secureEstablishedP`.
+   */
+  protected keepAliveIntervalTimer?: NodeJS.Timeout;
+
   // Sets everything up
   public constructor(
     public readonly type: ConnectionType,
@@ -227,7 +241,17 @@ class QUICConnection {
       const caPEMs = utils.collectPEMs(this.config.ca);
       this.caDERs = caPEMs.map(utils.pemToDER);
     }
+    if (this.config.keepAliveIntervalTime != null) {
+      const establishedSubscription = this.established$.subscribe(() => {
+        this.keepAliveIntervalTimer = setInterval(() => {
+          this.connection.sendAckEliciting();
+          this.processSend();
+        }, this.config.keepAliveIntervalTime);
+        establishedSubscription.unsubscribe();
+      });
+    }
     this.closed$.subscribe(() => {
+      clearTimeout(this.keepAliveIntervalTimer);
       if (this.isTimedOut_) {
         void this.endStreams(true, new errors.ErrorQUICConnectionIdleTimeout());
         return;

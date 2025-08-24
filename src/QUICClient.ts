@@ -233,6 +233,9 @@ class QUICClient {
     // to the socket.
     connection.send$.subscribe(socket.socketSend$);
     socket.connectionMap.set(connection.connectionId_, connection);
+    connection.closed$.subscribe(() => {
+      socket!.connectionMap.delete(connection.connectionId_);
+    });
     connection.processSend();
 
     // Waiting for establishment or failure
@@ -245,7 +248,9 @@ class QUICClient {
         merge(connection.established$, connection.closed$, abort),
         { defaultValue: undefined },
       );
-      if (connection.isTimedOut) throw Error('TMP IMP connection timed out');
+      if (connection.isTimedOut) {
+        throw new errors.ErrorQUICConnectionIdleTimeout();
+      }
       if (connection.peerError !== null) {
         throw Error(
           `TMP IMP peer errored with code ${connection.peerError.errorCode}`,

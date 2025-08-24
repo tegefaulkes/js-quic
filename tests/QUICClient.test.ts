@@ -1,13 +1,16 @@
 import type { ClientCryptoOps, ServerCryptoOps } from '#types.js';
-import type { KeyTypes } from './utils.js';
+import type { KeyTypes, TLSConfigs } from './utils.js';
 import Logger, { LogLevel, StreamHandler, formatting } from '@matrixai/logger';
 import { test } from '@fast-check/jest';
 import { firstValueFrom, Subject, timer } from 'rxjs';
+import * as fc from 'fast-check';
 import * as testsUtils from './utils.js';
 import { sleep } from './utils.js';
 import QUICClient from '#QUICClient.js';
 import QUICServer from '#QUICServer.js';
 import * as errors from '#errors.js';
+import QUICSocket from '#QUICSocket.js';
+import { Step } from '#QUICConnection.js';
 
 describe(QUICClient.name, () => {
   const logger = new Logger(`${QUICClient.name} Test`, LogLevel.INFO, [
@@ -16,9 +19,9 @@ describe(QUICClient.name, () => {
     ),
   ]);
   const localhost = '127.0.0.1';
-  // Intentional hard coded port, no destination exists
+  // Intentional hard-coded port, no destination exists
   const noTargetPort = 55544;
-  // This has to be setup asynchronously due to key generation
+  // This has to be set up asynchronously due to key generation
   const serverCryptoOps: ServerCryptoOps = {
     sign: testsUtils.signHMAC,
     verify: testsUtils.verifyHMAC,
@@ -36,7 +39,7 @@ describe(QUICClient.name, () => {
     randomBytes: testsUtils.randomBytes,
   };
 
-  // We need to test the stream making
+  // We need to test making streams
   beforeEach(async () => {
     key = await testsUtils.generateKeyHMAC();
     socketCleanMethods = testsUtils.socketCleanupFactory();
@@ -82,7 +85,7 @@ describe(QUICClient.name, () => {
       });
       socketCleanMethods.extractSocket(client);
       const connection = await connectionP;
-      if (connection == null) fail('connection not found');
+      if (connection == null) throw new Error('connection not found');
       expect(connection.sourceHost).toBe('127.0.0.1');
       expect(connection.sourcePort).toBe(server.port);
       expect(connection.host).toBe('127.0.0.1');
@@ -130,7 +133,7 @@ describe(QUICClient.name, () => {
       });
       socketCleanMethods.extractSocket(client);
       const connection = await connectionP;
-      if (connection == null) fail('connection not found');
+      if (connection == null) throw Error('connection not found');
       expect(connection.sourceHost).toBe('::1');
       expect(connection.sourcePort).toBe(server.port);
       expect(connection.host).toBe('::1');
@@ -173,7 +176,7 @@ describe(QUICClient.name, () => {
       });
       socketCleanMethods.extractSocket(client);
       const connection = await connectionP;
-      if (connection == null) fail('connection not found');
+      if (connection == null) throw Error('connection not found');
       expect(connection.sourceHost).toBe('::');
       expect(connection.sourcePort).toBe(server.port);
       expect(connection.host).toBe('::1');
@@ -689,781 +692,706 @@ describe(QUICClient.name, () => {
     ).rejects.toThrow(errors.ErrorQUICClientInvalidArgument);
   });
 
-  // Describe('handles random packets', () => {
-  //   test.prop(
-  //     [
-  //       fc.noShrink(
-  //         fc.array(fc.uint8Array({ minLength: 1 }), { minLength: 5 }),
-  //       ),
-  //       fc.noShrink(
-  //         fc.array(fc.uint8Array({ minLength: 1 }), { minLength: 5 }),
-  //       ),
-  //     ],
-  //     { numRuns: 1 },
-  //   )('client handles random noise from server', async (data, messages) => {
-  //     const tlsConfig = await testsUtils.generateTLSConfig('RSA');
-  //     const socket = new QUICSocket({
-  //       logger: logger.getChild('socket'),
-  //     });
-  //     await socket.start({
-  //       host: localhost,
-  //     });
-  //     const server = new QUICServer({
-  //       crypto: {
-  //         key,
-  //         ops: serverCryptoOps,
-  //       },
-  //       logger: logger.getChild(QUICServer.name),
-  //       config: {
-  //         key: tlsConfig.leafKeyPairPEM.privateKey,
-  //         cert: tlsConfig.leafCertPEM,
-  //         verifyPeer: false,
-  //       },
-  //       socket,
-  //     });
-  //     socketCleanMethods.extractSocket(server);
-  //     const connectionP = firstValueFrom(server.connection$, {
-  //       defaultValue: undefined,
-  //     });
-  //     await server.start({
-  //       host: localhost,
-  //     });
-  //     const client = await QUICClient.createQUICClient({
-  //       host: '::ffff:127.0.0.1',
-  //       port: server.port,
-  //       localHost: '::',
-  //       crypto: {
-  //         ops: clientCryptoOps,
-  //       },
-  //       logger: logger.getChild(QUICClient.name),
-  //       config: {
-  //         verifyPeer: false,
-  //       },
-  //     });
-  //     socketCleanMethods.extractSocket(client);
-  //     const connection = await connectionP;
-  //     // Do the test
-  //     const serverStreamProms: Array<Promise<void>> = [];
-  //     conn.addEventListener(
-  //       events.EventQUICConnectionStream.name,
-  //       (streamEvent: events.EventQUICConnectionStream) => {
-  //         const stream = streamEvent.detail;
-  //         const streamProm = stream.readable.pipeTo(stream.writable);
-  //         serverStreamProms.push(streamProm);
-  //       },
-  //     );
-  //     // Sending random data to client from the perspective of the server
-  //     let running = true;
-  //     const randomDataProm = (async () => {
-  //       let count = 0;
-  //       while (running) {
-  //         await socket.send(
-  //           data[count % data.length],
-  //           client.localPort,
-  //           '127.0.0.1',
-  //         );
-  //         await sleep(5);
-  //         count += 1;
-  //       }
-  //     })();
-  //     // We want to check that things function fine between bad data
-  //     const randomActivityProm = (async () => {
-  //       const stream = client.connection.newStream();
-  //       await Promise.all([
-  //         (async () => {
-  //           // Write data
-  //           const writer = stream.writable.getWriter();
-  //           for (const message of messages) {
-  //             await writer.write(message);
-  //             await sleep(7);
-  //           }
-  //           await writer.close();
-  //         })(),
-  //         (async () => {
-  //           // Consume readable
-  //           for await (const _ of stream.readable) {
-  //             // Do nothing
-  //           }
-  //         })(),
-  //       ]);
-  //       running = false;
-  //     })();
-  //     // Wait for running activity to finish, should complete without error
-  //     await Promise.all([
-  //       randomActivityProm,
-  //       serverStreamProms,
-  //       randomDataProm,
-  //     ]);
-  //     await client.destroy({ force: true });
-  //     await server.stop();
-  //     await socket.stop();
-  //   });
-  //
-  //   test.prop(
-  //     [
-  //       fc.noShrink(
-  //         fc.array(fc.uint8Array({ minLength: 1 }), { minLength: 5 }),
-  //       ),
-  //       fc.noShrink(
-  //         fc.array(fc.uint8Array({ minLength: 1 }), { minLength: 5 }),
-  //       ),
-  //     ],
-  //     { numRuns: 1 },
-  //   )('client handles random noise from external', async (data, messages) => {
-  //     const tlsConfig = await testsUtils.generateTLSConfig('RSA');
-  //     const socket = new QUICSocket({
-  //       logger: logger.getChild('socket'),
-  //     });
-  //     await socket.start({
-  //       host: localhost,
-  //     });
-  //     const server = new QUICServer({
-  //       crypto: {
-  //         key,
-  //         ops: serverCryptoOps,
-  //       },
-  //       logger: logger.getChild(QUICServer.name),
-  //       config: {
-  //         key: tlsConfig.leafKeyPairPEM.privateKey,
-  //         cert: tlsConfig.leafCertPEM,
-  //         verifyPeer: false,
-  //       },
-  //     });
-  //     socketCleanMethods.extractSocket(server);
-  //     const connectionEventProm = promise<events.EventQUICServerConnection>();
-  //     server.addEventListener(
-  //       events.EventQUICServerConnection.name,
-  //       (e: events.EventQUICServerConnection) =>
-  //         connectionEventProm.resolveP(e),
-  //     );
-  //     await server.start({
-  //       host: localhost,
-  //     });
-  //     const client = await QUICClient.createQUICClient({
-  //       host: '::ffff:127.0.0.1',
-  //       port: server.port,
-  //       localHost: '::',
-  //       crypto: {
-  //         ops: clientCryptoOps,
-  //       },
-  //       logger: logger.getChild(QUICClient.name),
-  //       config: {
-  //         verifyPeer: false,
-  //       },
-  //     });
-  //     socketCleanMethods.extractSocket(client);
-  //     const conn = (await connectionEventProm.p).detail;
-  //     // Do the test
-  //     const serverStreamProms: Array<Promise<void>> = [];
-  //     conn.addEventListener(
-  //       events.EventQUICConnectionStream.name,
-  //       (streamEvent: events.EventQUICConnectionStream) => {
-  //         const stream = streamEvent.detail;
-  //         const streamProm = stream.readable.pipeTo(stream.writable);
-  //         serverStreamProms.push(streamProm);
-  //       },
-  //     );
-  //     // Sending random data to client from the perspective of the server
-  //     let running = true;
-  //     const randomDataProm = (async () => {
-  //       let count = 0;
-  //       while (running) {
-  //         await socket.send(
-  //           data[count % data.length],
-  //           client.localPort,
-  //           '127.0.0.1',
-  //         );
-  //         await sleep(5);
-  //         count += 1;
-  //       }
-  //     })();
-  //     // We want to check that things function fine between bad data
-  //     const randomActivityProm = (async () => {
-  //       const stream = client.connection.newStream();
-  //       await Promise.all([
-  //         (async () => {
-  //           // Write data
-  //           const writer = stream.writable.getWriter();
-  //           for (const message of messages) {
-  //             await writer.write(message);
-  //             await sleep(7);
-  //           }
-  //           await writer.close();
-  //         })(),
-  //         (async () => {
-  //           // Consume readable
-  //           for await (const _ of stream.readable) {
-  //             // Do nothing
-  //           }
-  //         })(),
-  //       ]);
-  //       running = false;
-  //     })();
-  //     // Wait for running activity to finish, should complete without error
-  //     await Promise.all([
-  //       randomActivityProm,
-  //       serverStreamProms,
-  //       randomDataProm,
-  //     ]);
-  //     await client.destroy({ force: true });
-  //     await server.stop();
-  //     await socket.stop();
-  //   });
-  //
-  //   test.prop(
-  //     [
-  //       fc.noShrink(
-  //         fc.array(fc.uint8Array({ minLength: 1 }), { minLength: 5 }),
-  //       ),
-  //       fc.noShrink(
-  //         fc.array(fc.uint8Array({ minLength: 1 }), { minLength: 5 }),
-  //       ),
-  //     ],
-  //     { numRuns: 1 },
-  //   )('server handles random noise from client', async (data, messages) => {
-  //     const tlsConfig = await testsUtils.generateTLSConfig('RSA');
-  //     const socket = new QUICSocket({
-  //       logger: logger.getChild('socket'),
-  //     });
-  //     await socket.start({
-  //       host: localhost,
-  //     });
-  //     const server = new QUICServer({
-  //       crypto: {
-  //         key,
-  //         ops: serverCryptoOps,
-  //       },
-  //       logger: logger.getChild(QUICServer.name),
-  //       config: {
-  //         key: tlsConfig.leafKeyPairPEM.privateKey,
-  //         cert: tlsConfig.leafCertPEM,
-  //         verifyPeer: false,
-  //       },
-  //     });
-  //     socketCleanMethods.extractSocket(server);
-  //     const connectionEventProm = promise<events.EventQUICServerConnection>();
-  //     server.addEventListener(
-  //       events.EventQUICServerConnection.name,
-  //       (e: events.EventQUICServerConnection) =>
-  //         connectionEventProm.resolveP(e),
-  //     );
-  //     await server.start({
-  //       host: localhost,
-  //     });
-  //     const client = await QUICClient.createQUICClient({
-  //       host: localhost,
-  //       port: server.port,
-  //       socket,
-  //       crypto: {
-  //         ops: clientCryptoOps,
-  //       },
-  //       logger: logger.getChild(QUICClient.name),
-  //       config: {
-  //         verifyPeer: false,
-  //       },
-  //     });
-  //     socketCleanMethods.extractSocket(client);
-  //     const conn = (await connectionEventProm.p).detail;
-  //     // Do the test
-  //     const serverStreamProms: Array<Promise<void>> = [];
-  //     conn.addEventListener(
-  //       events.EventQUICConnectionStream.name,
-  //       (streamEvent: events.EventQUICConnectionStream) => {
-  //         const stream = streamEvent.detail;
-  //         const streamProm = stream.readable.pipeTo(stream.writable);
-  //         serverStreamProms.push(streamProm);
-  //       },
-  //     );
-  //     // Sending random data to client from the perspective of the server
-  //     let running = true;
-  //     const randomDataProm = (async () => {
-  //       let count = 0;
-  //       while (running) {
-  //         await socket.send(
-  //           data[count % data.length],
-  //           server.port,
-  //           '127.0.0.1',
-  //         );
-  //         await sleep(5);
-  //         count += 1;
-  //       }
-  //     })();
-  //     // We want to check that things function fine between bad data
-  //     const randomActivityProm = (async () => {
-  //       const stream = client.connection.newStream();
-  //       await Promise.all([
-  //         (async () => {
-  //           // Write data
-  //           const writer = stream.writable.getWriter();
-  //           for (const message of messages) {
-  //             await writer.write(message);
-  //             await sleep(7);
-  //           }
-  //           await writer.close();
-  //         })(),
-  //         (async () => {
-  //           // Consume readable
-  //           for await (const _ of stream.readable) {
-  //             // Do nothing
-  //           }
-  //         })(),
-  //       ]);
-  //       running = false;
-  //     })();
-  //     // Wait for running activity to finish, should complete without error
-  //     await Promise.all([
-  //       randomActivityProm,
-  //       serverStreamProms,
-  //       randomDataProm,
-  //     ]);
-  //     await client.destroy({ force: true });
-  //     await server.stop();
-  //     await socket.stop();
-  //   });
-  //
-  //   test.prop(
-  //     [
-  //       fc.noShrink(
-  //         fc.array(fc.uint8Array({ minLength: 1 }), { minLength: 5 }),
-  //       ),
-  //       fc.noShrink(
-  //         fc.array(fc.uint8Array({ minLength: 1 }), { minLength: 5 }),
-  //       ),
-  //     ],
-  //     { numRuns: 1 },
-  //   )('server handles random noise from external', async (data, messages) => {
-  //     const tlsConfig = await testsUtils.generateTLSConfig('RSA');
-  //     const socket = new QUICSocket({
-  //       logger: logger.getChild('socket'),
-  //     });
-  //     await socket.start({
-  //       host: localhost,
-  //     });
-  //     const server = new QUICServer({
-  //       crypto: {
-  //         key,
-  //         ops: serverCryptoOps,
-  //       },
-  //       logger: logger.getChild(QUICServer.name),
-  //       config: {
-  //         key: tlsConfig.leafKeyPairPEM.privateKey,
-  //         cert: tlsConfig.leafCertPEM,
-  //         verifyPeer: false,
-  //       },
-  //     });
-  //     socketCleanMethods.extractSocket(server);
-  //     const connectionEventProm = promise<events.EventQUICServerConnection>();
-  //     server.addEventListener(
-  //       events.EventQUICServerConnection.name,
-  //       (e: events.EventQUICServerConnection) =>
-  //         connectionEventProm.resolveP(e),
-  //     );
-  //     await server.start({
-  //       host: localhost,
-  //     });
-  //     const client = await QUICClient.createQUICClient({
-  //       host: localhost,
-  //       port: server.port,
-  //       localHost: localhost,
-  //       crypto: {
-  //         ops: clientCryptoOps,
-  //       },
-  //       logger: logger.getChild(QUICClient.name),
-  //       config: {
-  //         verifyPeer: false,
-  //       },
-  //     });
-  //     socketCleanMethods.extractSocket(client);
-  //     const conn = (await connectionEventProm.p).detail;
-  //     // Do the test
-  //     const serverStreamProms: Array<Promise<void>> = [];
-  //     conn.addEventListener(
-  //       events.EventQUICConnectionStream.name,
-  //       (streamEvent: events.EventQUICConnectionStream) => {
-  //         const stream = streamEvent.detail;
-  //         const streamProm = stream.readable.pipeTo(stream.writable);
-  //         serverStreamProms.push(streamProm);
-  //       },
-  //     );
-  //     // Sending random data to client from the perspective of the server
-  //     let running = true;
-  //     const randomDataProm = (async () => {
-  //       let count = 0;
-  //       while (running) {
-  //         await socket.send(
-  //           data[count % data.length],
-  //           server.port,
-  //           '127.0.0.1',
-  //         );
-  //         await sleep(5);
-  //         count += 1;
-  //       }
-  //     })();
-  //     // We want to check that things function fine between bad data
-  //     const randomActivityProm = (async () => {
-  //       const stream = client.connection.newStream();
-  //       await Promise.all([
-  //         (async () => {
-  //           // Write data
-  //           const writer = stream.writable.getWriter();
-  //           for (const message of messages) {
-  //             await writer.write(message);
-  //             await sleep(7);
-  //           }
-  //           await writer.close();
-  //         })(),
-  //         (async () => {
-  //           // Consume readable
-  //           for await (const _ of stream.readable) {
-  //             // Do nothing
-  //           }
-  //         })(),
-  //       ]);
-  //       running = false;
-  //     })();
-  //     // Wait for running activity to finish, should complete without error
-  //     await Promise.all([
-  //       randomActivityProm,
-  //       serverStreamProms,
-  //       randomDataProm,
-  //     ]);
-  //     await client.destroy({ force: true });
-  //     await server.stop();
-  //     await socket.stop();
-  //   });
-  // });
+  describe('handles random packets', () => {
+    test.prop(
+      [
+        fc.noShrink(
+          fc.array(fc.uint8Array({ minLength: 1 }), { minLength: 5 }),
+        ),
+        fc.noShrink(
+          fc.array(fc.uint8Array({ minLength: 1 }), { minLength: 5 }),
+        ),
+      ],
+      { numRuns: 1 },
+    )('client handles random noise from server', async (data, messages) => {
+      const tlsConfig = await testsUtils.generateTLSConfig('RSA');
+      const socket = new QUICSocket({
+        logger: logger.getChild('socket'),
+      });
+      await socket.start({
+        host: localhost,
+      });
+      const server = new QUICServer({
+        crypto: {
+          key,
+          ops: serverCryptoOps,
+        },
+        logger: logger.getChild(QUICServer.name),
+        config: {
+          key: tlsConfig.leafKeyPairPEM.privateKey,
+          cert: tlsConfig.leafCertPEM,
+          verifyPeer: false,
+        },
+        socket,
+      });
+      socketCleanMethods.extractSocket(server);
+      const serverConnectionP = firstValueFrom(server.connection$);
+      await server.start({
+        host: localhost,
+      });
+      const client = await QUICClient.createQUICClient({
+        host: '::ffff:127.0.0.1',
+        port: server.port,
+        localHost: '::',
+        crypto: {
+          ops: clientCryptoOps,
+        },
+        logger: logger.getChild(QUICClient.name),
+        config: {
+          verifyPeer: false,
+        },
+      });
+      socketCleanMethods.extractSocket(client);
+      let droppedPacketCount = 0;
+      // @ts-ignore: using protected property
+      client.socket.quicSocketMessageDropped$.subscribe(
+        () => droppedPacketCount++,
+      );
+      const serverConnection = await serverConnectionP;
+      // Do the test
+      const serverStreamProms: Array<Promise<void>> = [];
+      serverConnection?.stream$.subscribe((stream) => {
+        const streamProm = stream.readable.pipeTo(stream.writable);
+        serverStreamProms.push(streamProm);
+      });
+      // Sending random data to client from the perspective of the server
+      let running = true;
+      let badPacketsSent = 0;
+      const randomDataProm = (async () => {
+        while (running) {
+          await socket.send(
+            data[badPacketsSent % data.length],
+            client.localPort,
+            '127.0.0.1',
+          );
+          await sleep(5);
+          badPacketsSent += 1;
+        }
+      })();
+      // We want to check that things function fine between bad data
+      const randomActivityProm = (async () => {
+        const stream = client.connection.newStream();
+        await Promise.all([
+          (async () => {
+            // Write data
+            const writer = stream.writable.getWriter();
+            for (const message of messages) {
+              await writer.write(Buffer.from(message));
+              await sleep(7);
+            }
+            await writer.close();
+          })(),
+          (async () => {
+            // Consume readable
+            for await (const _ of stream.readable) {
+              // Do nothing
+            }
+          })(),
+        ]);
+        running = false;
+      })();
+      // Wait for running activity to finish, should complete without error
+      await Promise.all([
+        randomActivityProm,
+        serverStreamProms,
+        randomDataProm,
+      ]);
+      expect(droppedPacketCount).toBe(badPacketsSent);
+      await client.destroy({ force: true });
+      await server.stop({ force: true });
+      await socket.stop();
+    });
 
-  // Describe('keepalive', () => {
-  //   let tlsConfig: TLSConfigs;
-  //   beforeEach(async () => {
-  //     tlsConfig = await testsUtils.generateTLSConfig('RSA');
-  //   });
-  //   test('connection can time out on client', async () => {
-  //     const connectionEventProm = promise<QUICConnection>();
-  //     const server = new QUICServer({
-  //       crypto: {
-  //         key,
-  //         ops: serverCryptoOps,
-  //       },
-  //       logger: logger.getChild(QUICServer.name),
-  //       config: {
-  //         key: tlsConfig.leafKeyPairPEM.privateKey,
-  //         cert: tlsConfig.leafCertPEM,
-  //         verifyPeer: false,
-  //         maxIdleTimeout: 1000,
-  //       },
-  //     });
-  //     socketCleanMethods.extractSocket(server);
-  //     server.addEventListener(
-  //       events.EventQUICServerConnection.name,
-  //       (e: events.EventQUICServerConnection) =>
-  //         connectionEventProm.resolveP(e.detail),
-  //     );
-  //     await server.start({
-  //       host: localhost,
-  //     });
-  //     const client = await QUICClient.createQUICClient({
-  //       host: '::ffff:127.0.0.1',
-  //       port: server.port,
-  //       localHost: '::',
-  //       crypto: {
-  //         ops: clientCryptoOps,
-  //       },
-  //       logger: logger.getChild(QUICClient.name),
-  //       config: {
-  //         verifyPeer: false,
-  //         maxIdleTimeout: 100,
-  //       },
-  //     });
-  //     socketCleanMethods.extractSocket(client);
-  //     // Setting no keepalive should cause the connection to time out
-  //     // It has cleaned up due to timeout
-  //     const clientConnection = client.connection;
-  //     const clientTimeoutProm = promise<void>();
-  //     clientConnection.addEventListener(
-  //       events.EventQUICConnectionError.name,
-  //       (event: events.EventQUICConnectionError) => {
-  //         if (event.detail instanceof errors.ErrorQUICConnectionIdleTimeout) {
-  //           clientTimeoutProm.resolveP();
-  //         }
-  //       },
-  //     );
-  //     await clientTimeoutProm.p;
-  //     const serverConnection = await connectionEventProm.p;
-  //     await sleep(100);
-  //     // Server and client has cleaned up
-  //     expect(clientConnection[running]).toBeFalse();
-  //     expect(serverConnection[running]).toBeFalse();
-  //
-  //     await client.destroy();
-  //     await server.stop();
-  //   });
-  //   test('connection can time out on server', async () => {
-  //     const connectionEventProm = promise<QUICConnection>();
-  //     const server = new QUICServer({
-  //       crypto: {
-  //         key,
-  //         ops: serverCryptoOps,
-  //       },
-  //       logger: logger.getChild(QUICServer.name),
-  //       config: {
-  //         key: tlsConfig.leafKeyPairPEM.privateKey,
-  //         cert: tlsConfig.leafCertPEM,
-  //         verifyPeer: false,
-  //         maxIdleTimeout: 100,
-  //       },
-  //     });
-  //     socketCleanMethods.extractSocket(server);
-  //     server.addEventListener(
-  //       events.EventQUICServerConnection.name,
-  //       (e: events.EventQUICServerConnection) =>
-  //         connectionEventProm.resolveP(e.detail),
-  //     );
-  //     await server.start({
-  //       host: localhost,
-  //     });
-  //     const client = await QUICClient.createQUICClient({
-  //       host: '::ffff:127.0.0.1',
-  //       port: server.port,
-  //       localHost: '::',
-  //       crypto: {
-  //         ops: clientCryptoOps,
-  //       },
-  //       logger: logger.getChild(QUICClient.name),
-  //       config: {
-  //         verifyPeer: false,
-  //         maxIdleTimeout: 1000,
-  //       },
-  //     });
-  //     socketCleanMethods.extractSocket(client);
-  //     // Setting no keepalive should cause the connection to time out
-  //     // It has cleaned up due to timeout
-  //     const clientConnection = client.connection;
-  //     const serverConnection = await connectionEventProm.p;
-  //     const serverTimeoutProm = promise<void>();
-  //     serverConnection.addEventListener(
-  //       events.EventQUICConnectionError.name,
-  //       (evt: events.EventQUICConnectionError) => {
-  //         if (evt.detail instanceof errors.ErrorQUICConnectionIdleTimeout) {
-  //           serverTimeoutProm.resolveP();
-  //         }
-  //       },
-  //     );
-  //     await serverTimeoutProm.p;
-  //     await sleep(100);
-  //     // Server and client has cleaned up
-  //     expect(clientConnection[running]).toBeFalse();
-  //     expect(serverConnection[running]).toBeFalse();
-  //
-  //     await client.destroy();
-  //     await server.stop();
-  //   });
-  //   test('keep alive prevents timeout on client', async () => {
-  //     const connectionEventProm = promise<QUICConnection>();
-  //     const server = new QUICServer({
-  //       crypto: {
-  //         key,
-  //         ops: serverCryptoOps,
-  //       },
-  //       logger: logger.getChild(QUICServer.name),
-  //       config: {
-  //         key: tlsConfig.leafKeyPairPEM.privateKey,
-  //         cert: tlsConfig.leafCertPEM,
-  //         verifyPeer: false,
-  //         maxIdleTimeout: 20000,
-  //       },
-  //     });
-  //     socketCleanMethods.extractSocket(server);
-  //     server.addEventListener(
-  //       events.EventQUICServerConnection.name,
-  //       (e: events.EventQUICServerConnection) =>
-  //         connectionEventProm.resolveP(e.detail),
-  //     );
-  //     await server.start({
-  //       host: localhost,
-  //     });
-  //     const client = await QUICClient.createQUICClient({
-  //       host: '::ffff:127.0.0.1',
-  //       port: server.port,
-  //       localHost: '::',
-  //       crypto: {
-  //         ops: clientCryptoOps,
-  //       },
-  //       logger: logger.getChild(QUICClient.name),
-  //       config: {
-  //         verifyPeer: false,
-  //         maxIdleTimeout: 100,
-  //         keepAliveIntervalTime: 50,
-  //       },
-  //     });
-  //     socketCleanMethods.extractSocket(client);
-  //     // Setting no keepalive should cause the connection to time out
-  //     // It has cleaned up due to timeout
-  //     const clientConnection = client.connection;
-  //     const clientTimeoutProm = promise<void>();
-  //     clientConnection.addEventListener(
-  //       events.EventQUICConnectionStream.name,
-  //       (event: events.EventQUICConnectionError) => {
-  //         if (event.detail instanceof errors.ErrorQUICConnectionIdleTimeout) {
-  //           clientTimeoutProm.resolveP();
-  //         }
-  //       },
-  //     );
-  //     await connectionEventProm.p;
-  //     // Connection would time out after 100ms if keep alive didn't work
-  //     await Promise.race([
-  //       sleep(300),
-  //       clientTimeoutProm.p.then(() => {
-  //         throw Error('Connection timed out');
-  //       }),
-  //     ]);
-  //     await client.destroy();
-  //     await server.stop();
-  //   });
-  //   test('keep alive prevents timeout on server', async () => {
-  //     const connectionEventProm = promise<QUICConnection>();
-  //     const server = new QUICServer({
-  //       crypto: {
-  //         key,
-  //         ops: serverCryptoOps,
-  //       },
-  //       logger: logger.getChild(QUICServer.name),
-  //       config: {
-  //         key: tlsConfig.leafKeyPairPEM.privateKey,
-  //         cert: tlsConfig.leafCertPEM,
-  //         verifyPeer: false,
-  //         maxIdleTimeout: 100,
-  //         keepAliveIntervalTime: 50,
-  //       },
-  //     });
-  //     socketCleanMethods.extractSocket(server);
-  //     server.addEventListener(
-  //       events.EventQUICServerConnection.name,
-  //       (e: events.EventQUICServerConnection) =>
-  //         connectionEventProm.resolveP(e.detail),
-  //     );
-  //     await server.start({
-  //       host: localhost,
-  //     });
-  //     const client = await QUICClient.createQUICClient({
-  //       host: '::ffff:127.0.0.1',
-  //       port: server.port,
-  //       localHost: '::',
-  //       crypto: {
-  //         ops: clientCryptoOps,
-  //       },
-  //       logger: logger.getChild(QUICClient.name),
-  //       config: {
-  //         verifyPeer: false,
-  //         maxIdleTimeout: 20000,
-  //       },
-  //     });
-  //     socketCleanMethods.extractSocket(client);
-  //     // Setting no keepalive should cause the connection to time out
-  //     // It has cleaned up due to timeout
-  //     const serverConnection = await connectionEventProm.p;
-  //     const serverTimeoutProm = promise<void>();
-  //     serverConnection.addEventListener(
-  //       events.EventQUICConnectionStream.name,
-  //       (event: events.EventQUICConnectionError) => {
-  //         if (event.detail instanceof errors.ErrorQUICConnectionIdleTimeout) {
-  //           serverTimeoutProm.resolveP();
-  //         }
-  //       },
-  //     );
-  //     // Connection would time out after 100ms if keep alive didn't work
-  //     await Promise.race([
-  //       sleep(300),
-  //       serverTimeoutProm.p.then(() => {
-  //         throw Error('Connection timed out');
-  //       }),
-  //     ]);
-  //     await client.destroy();
-  //     await server.stop();
-  //   });
-  //   test('client keep alive prevents timeout on server', async () => {
-  //     const connectionEventProm = promise<QUICConnection>();
-  //     const server = new QUICServer({
-  //       crypto: {
-  //         key,
-  //         ops: serverCryptoOps,
-  //       },
-  //       logger: logger.getChild(QUICServer.name),
-  //       config: {
-  //         key: tlsConfig.leafKeyPairPEM.privateKey,
-  //         cert: tlsConfig.leafCertPEM,
-  //         verifyPeer: false,
-  //         maxIdleTimeout: 100,
-  //       },
-  //     });
-  //     socketCleanMethods.extractSocket(server);
-  //     server.addEventListener(
-  //       events.EventQUICServerConnection.name,
-  //       (e: events.EventQUICServerConnection) =>
-  //         connectionEventProm.resolveP(e.detail),
-  //     );
-  //     await server.start({
-  //       host: localhost,
-  //     });
-  //     const client = await QUICClient.createQUICClient({
-  //       host: '::ffff:127.0.0.1',
-  //       port: server.port,
-  //       localHost: '::',
-  //       crypto: {
-  //         ops: clientCryptoOps,
-  //       },
-  //       logger: logger.getChild(QUICClient.name),
-  //       config: {
-  //         verifyPeer: false,
-  //         maxIdleTimeout: 20000,
-  //         keepAliveIntervalTime: 50,
-  //       },
-  //     });
-  //     socketCleanMethods.extractSocket(client);
-  //     // Setting no keepalive should cause the connection to time out
-  //     // It has cleaned up due to timeout
-  //     const serverConnection = await connectionEventProm.p;
-  //     const serverTimeoutProm = promise<void>();
-  //     serverConnection.addEventListener(
-  //       events.EventQUICConnectionStream.name,
-  //       (event: events.EventQUICConnectionError) => {
-  //         if (event.detail instanceof errors.ErrorQUICConnectionIdleTimeout) {
-  //           serverTimeoutProm.resolveP();
-  //         }
-  //       },
-  //     );
-  //     // Connection would time out after 100ms if keep alive didn't work
-  //     await Promise.race([
-  //       sleep(300),
-  //       serverTimeoutProm.p.then(() => {
-  //         throw Error('Connection timed out');
-  //       }),
-  //     ]);
-  //     await client.destroy();
-  //     await server.stop();
-  //   });
-  //   test('Keep alive does not prevent connection timeout', async () => {
-  //     const clientProm = QUICClient.createQUICClient({
-  //       host: '::ffff:127.0.0.1',
-  //       port: noTargetPort,
-  //       localHost: '::',
-  //       crypto: {
-  //         ops: clientCryptoOps,
-  //       },
-  //       logger: logger.getChild(QUICClient.name),
-  //       config: {
-  //         verifyPeer: false,
-  //         maxIdleTimeout: 100,
-  //         keepAliveIntervalTime: 50,
-  //       },
-  //     });
-  //     await expect(clientProm).rejects.toThrow(
-  //       errors.ErrorQUICConnectionIdleTimeout,
-  //     );
-  //   });
-  // });
+    test.prop(
+      [
+        fc.noShrink(
+          fc.array(fc.uint8Array({ minLength: 1 }), { minLength: 5 }),
+        ),
+        fc.noShrink(
+          fc.array(fc.uint8Array({ minLength: 1 }), { minLength: 5 }),
+        ),
+      ],
+      { numRuns: 1 },
+    )('client handles random noise from external', async (data, messages) => {
+      const tlsConfig = await testsUtils.generateTLSConfig('RSA');
+      const socket = new QUICSocket({
+        logger: logger.getChild('socket'),
+      });
+      await socket.start({
+        host: localhost,
+      });
+      const server = new QUICServer({
+        crypto: {
+          key,
+          ops: serverCryptoOps,
+        },
+        logger: logger.getChild(QUICServer.name),
+        config: {
+          key: tlsConfig.leafKeyPairPEM.privateKey,
+          cert: tlsConfig.leafCertPEM,
+          verifyPeer: false,
+        },
+      });
+      socketCleanMethods.extractSocket(server);
+      const serverConnectionP = firstValueFrom(server.connection$);
+      await server.start({
+        host: localhost,
+      });
+      const client = await QUICClient.createQUICClient({
+        host: '::ffff:127.0.0.1',
+        port: server.port,
+        localHost: '::',
+        crypto: {
+          ops: clientCryptoOps,
+        },
+        logger: logger.getChild(QUICClient.name),
+        config: {
+          verifyPeer: false,
+        },
+      });
+      socketCleanMethods.extractSocket(client);
+      let droppedPacketCount = 0;
+      // @ts-ignore: using protected property
+      client.socket.quicSocketMessageDropped$.subscribe(
+        () => droppedPacketCount++,
+      );
+      const serverConnection = await serverConnectionP;
+      // Do the test
+      const serverStreamProms: Array<Promise<void>> = [];
+      serverConnection.stream$.subscribe((stream) => {
+        const streamProm = stream.readable.pipeTo(stream.writable);
+        serverStreamProms.push(streamProm);
+      });
+      // Sending random data to client from the perspective of the server
+      let running = true;
+      let badPacketsSent = 0;
+      const randomDataProm = (async () => {
+        while (running) {
+          await socket.send(
+            data[badPacketsSent % data.length],
+            client.localPort,
+            '127.0.0.1',
+          );
+          await sleep(5);
+          badPacketsSent += 1;
+        }
+      })();
+      // We want to check that things function fine between bad data
+      const randomActivityProm = (async () => {
+        const stream = client.connection.newStream();
+        await Promise.all([
+          (async () => {
+            // Write data
+            const writer = stream.writable.getWriter();
+            for (const message of messages) {
+              await writer.write(Buffer.from(message));
+              await sleep(7);
+            }
+            await writer.close();
+          })(),
+          (async () => {
+            // Consume readable
+            for await (const _ of stream.readable) {
+              // Do nothing
+            }
+          })(),
+        ]);
+        running = false;
+      })();
+      // Wait for running activity to finish, should complete without error
+      await Promise.all([
+        randomActivityProm,
+        serverStreamProms,
+        randomDataProm,
+      ]);
+      expect(droppedPacketCount).toBe(badPacketsSent);
+      await client.destroy({ force: true });
+      await server.stop();
+      await socket.stop();
+    });
 
-  // describe.each(types)('custom TLS verification with %s', (type) => {
+    test.prop(
+      [
+        fc.noShrink(
+          fc.array(fc.uint8Array({ minLength: 1 }), { minLength: 5 }),
+        ),
+        fc.noShrink(
+          fc.array(fc.uint8Array({ minLength: 1 }), { minLength: 5 }),
+        ),
+      ],
+      { numRuns: 1 },
+    )('server handles random noise from client', async (data, messages) => {
+      const tlsConfig = await testsUtils.generateTLSConfig('RSA');
+      const socket = new QUICSocket({
+        logger: logger.getChild('socket'),
+      });
+      await socket.start({
+        host: localhost,
+      });
+      const server = new QUICServer({
+        crypto: {
+          key,
+          ops: serverCryptoOps,
+        },
+        logger: logger.getChild(QUICServer.name),
+        config: {
+          key: tlsConfig.leafKeyPairPEM.privateKey,
+          cert: tlsConfig.leafCertPEM,
+          verifyPeer: false,
+        },
+      });
+      socketCleanMethods.extractSocket(server);
+      let droppedPacketCount = 0;
+      // @ts-ignore: using protected property
+      server.socket.quicSocketMessageDropped$.subscribe(
+        () => droppedPacketCount++,
+      );
+      const serverConnectionP = firstValueFrom(server.connection$);
+      await server.start({
+        host: localhost,
+      });
+      const client = await QUICClient.createQUICClient({
+        host: localhost,
+        port: server.port,
+        socket,
+        crypto: {
+          ops: clientCryptoOps,
+        },
+        logger: logger.getChild(QUICClient.name),
+        config: {
+          verifyPeer: false,
+        },
+      });
+      socketCleanMethods.extractSocket(client);
+      const serverConnection = await serverConnectionP;
+      // Do the test
+      const serverStreamProms: Array<Promise<void>> = [];
+      serverConnection.stream$.subscribe((stream) => {
+        const streamProm = stream.readable.pipeTo(stream.writable);
+        serverStreamProms.push(streamProm);
+      });
+      // Sending random data to client from the perspective of the server
+      let running = true;
+      let badPacketsSent = 0;
+      const randomDataProm = (async () => {
+        while (running) {
+          await socket.send(
+            data[badPacketsSent % data.length],
+            server.port,
+            '127.0.0.1',
+          );
+          await sleep(5);
+          badPacketsSent += 1;
+        }
+      })();
+      // We want to check that things function fine between bad data
+      const randomActivityProm = (async () => {
+        const stream = client.connection.newStream();
+        await Promise.all([
+          (async () => {
+            // Write data
+            const writer = stream.writable.getWriter();
+            for (const message of messages) {
+              await writer.write(Buffer.from(message));
+              await sleep(7);
+            }
+            await writer.close();
+          })(),
+          (async () => {
+            // Consume readable
+            for await (const _ of stream.readable) {
+              // Do nothing
+            }
+          })(),
+        ]);
+        running = false;
+      })();
+      // Wait for running activity to finish, should complete without error
+      await Promise.all([
+        randomActivityProm,
+        serverStreamProms,
+        randomDataProm,
+      ]);
+      expect(droppedPacketCount).toBe(badPacketsSent);
+      await client.destroy({ force: true });
+      await server.stop({ force: true });
+      await socket.stop();
+    });
+
+    test.prop(
+      [
+        fc.noShrink(
+          fc.array(fc.uint8Array({ minLength: 1 }), { minLength: 5 }),
+        ),
+        fc.noShrink(
+          fc.array(fc.uint8Array({ minLength: 1 }), { minLength: 5 }),
+        ),
+      ],
+      { numRuns: 1 },
+    )('server handles random noise from external', async (data, messages) => {
+      const tlsConfig = await testsUtils.generateTLSConfig('RSA');
+      const socket = new QUICSocket({
+        logger: logger.getChild('socket'),
+      });
+      await socket.start({
+        host: localhost,
+      });
+      const server = new QUICServer({
+        crypto: {
+          key,
+          ops: serverCryptoOps,
+        },
+        logger: logger.getChild(QUICServer.name),
+        config: {
+          key: tlsConfig.leafKeyPairPEM.privateKey,
+          cert: tlsConfig.leafCertPEM,
+          verifyPeer: false,
+        },
+      });
+      socketCleanMethods.extractSocket(server);
+      let droppedPacketCount = 0;
+      // @ts-ignore: using protected property
+      server.socket.quicSocketMessageDropped$.subscribe(
+        () => droppedPacketCount++,
+      );
+      const connectionP = firstValueFrom(server.connection$);
+      await server.start({
+        host: localhost,
+      });
+      const client = await QUICClient.createQUICClient({
+        host: localhost,
+        port: server.port,
+        localHost: localhost,
+        crypto: {
+          ops: clientCryptoOps,
+        },
+        logger: logger.getChild(QUICClient.name),
+        config: {
+          verifyPeer: false,
+        },
+      });
+      socketCleanMethods.extractSocket(client);
+      const serverConnection = await connectionP;
+      // Do the test
+      const serverStreamProms: Array<Promise<void>> = [];
+      serverConnection.stream$.subscribe((stream) => {
+        const streamProm = stream.readable.pipeTo(stream.writable);
+        serverStreamProms.push(streamProm);
+      });
+      // Sending random data to client from the perspective of the server
+      let running = true;
+      let badPacketsSent = 0;
+      const randomDataProm = (async () => {
+        while (running) {
+          await socket.send(
+            data[badPacketsSent % data.length],
+            server.port,
+            '127.0.0.1',
+          );
+          await sleep(5);
+          badPacketsSent += 1;
+        }
+      })();
+      // We want to check that things function fine between bad data
+      const randomActivityProm = (async () => {
+        const stream = client.connection.newStream();
+        await Promise.all([
+          (async () => {
+            // Write data
+            const writer = stream.writable.getWriter();
+            for (const message of messages) {
+              await writer.write(Buffer.from(message));
+              await sleep(7);
+            }
+            await writer.close();
+          })(),
+          (async () => {
+            // Consume readable
+            for await (const _ of stream.readable) {
+              // Do nothing
+            }
+          })(),
+        ]);
+        running = false;
+      })();
+      // Wait for running activity to finish, should complete without error
+      await Promise.all([
+        randomActivityProm,
+        serverStreamProms,
+        randomDataProm,
+      ]);
+      expect(droppedPacketCount).toBe(badPacketsSent);
+      await client.destroy({ force: true });
+      await server.stop();
+      await socket.stop();
+    });
+  });
+
+  describe('keepalive', () => {
+    let tlsConfig: TLSConfigs;
+    beforeEach(async () => {
+      tlsConfig = await testsUtils.generateTLSConfig('RSA');
+    });
+    test('connection can time out on client', async () => {
+      const server = new QUICServer({
+        crypto: {
+          key,
+          ops: serverCryptoOps,
+        },
+        logger: logger.getChild(QUICServer.name),
+        config: {
+          key: tlsConfig.leafKeyPairPEM.privateKey,
+          cert: tlsConfig.leafCertPEM,
+          verifyPeer: false,
+          maxIdleTimeout: 1000,
+        },
+      });
+      socketCleanMethods.extractSocket(server);
+      const serverConnectionP = firstValueFrom(server.connection$);
+      await server.start({
+        host: localhost,
+      });
+      const client = await QUICClient.createQUICClient({
+        host: '::ffff:127.0.0.1',
+        port: server.port,
+        localHost: '::',
+        crypto: {
+          ops: clientCryptoOps,
+        },
+        logger: logger.getChild(QUICClient.name),
+        config: {
+          verifyPeer: false,
+          maxIdleTimeout: 100,
+        },
+      });
+      socketCleanMethods.extractSocket(client);
+      // Setting no keepalive should cause the connection to time out
+      // It has cleaned up due to timeout
+      const clientConnection = client.connection;
+      await firstValueFrom(clientConnection.timedOut$);
+      const serverConnection = await serverConnectionP;
+      await sleep(100);
+      // Server and client has cleaned up
+
+      expect(clientConnection.closed).toBeTrue();
+      expect(serverConnection.closed).toBeTrue();
+
+      await client.destroy();
+      await server.stop();
+    });
+    test('connection can time out on server', async () => {
+      const server = new QUICServer({
+        crypto: {
+          key,
+          ops: serverCryptoOps,
+        },
+        logger: logger.getChild(QUICServer.name),
+        config: {
+          key: tlsConfig.leafKeyPairPEM.privateKey,
+          cert: tlsConfig.leafCertPEM,
+          verifyPeer: false,
+          maxIdleTimeout: 100,
+        },
+      });
+      socketCleanMethods.extractSocket(server);
+      const serverConnectionP = firstValueFrom(server.connection$);
+      await server.start({
+        host: localhost,
+      });
+      const client = await QUICClient.createQUICClient({
+        host: '::ffff:127.0.0.1',
+        port: server.port,
+        localHost: '::',
+        crypto: {
+          ops: clientCryptoOps,
+        },
+        logger: logger.getChild(QUICClient.name),
+        config: {
+          verifyPeer: false,
+          maxIdleTimeout: 1000,
+        },
+      });
+      socketCleanMethods.extractSocket(client);
+      // Setting no keepalive should cause the connection to time out
+      // It has cleaned up due to timeout
+      const clientConnection = client.connection;
+      const serverConnection = await serverConnectionP;
+      await firstValueFrom(serverConnection.timedOut$);
+      await sleep(100);
+      // Server and client has cleaned up
+      expect(clientConnection.closed).toBeTrue();
+      expect(serverConnection.closed).toBeTrue();
+
+      await client.destroy();
+      await server.stop();
+    });
+    test('keep alive prevents timeout on client', async () => {
+      const server = new QUICServer({
+        crypto: {
+          key,
+          ops: serverCryptoOps,
+        },
+        logger: logger.getChild(QUICServer.name),
+        config: {
+          key: tlsConfig.leafKeyPairPEM.privateKey,
+          cert: tlsConfig.leafCertPEM,
+          verifyPeer: false,
+          maxIdleTimeout: 20000,
+        },
+      });
+      socketCleanMethods.extractSocket(server);
+      const serverConnectionP = firstValueFrom(server.connection$);
+      await server.start({
+        host: localhost,
+      });
+      const client = await QUICClient.createQUICClient({
+        host: '::ffff:127.0.0.1',
+        port: server.port,
+        localHost: '::',
+        crypto: {
+          ops: clientCryptoOps,
+        },
+        logger: logger.getChild(QUICClient.name),
+        config: {
+          verifyPeer: false,
+          maxIdleTimeout: 100,
+          keepAliveIntervalTime: 50,
+        },
+      });
+      socketCleanMethods.extractSocket(client);
+      // Setting no keepalive should cause the connection to time out
+      // It has cleaned up due to timeout
+      const clientConnection = client.connection;
+      const clientTimeoutP = firstValueFrom(clientConnection.timedOut$);
+      await serverConnectionP;
+      // Connection would time out after 100ms if keep alive didn't work
+      await Promise.race([
+        sleep(300),
+        clientTimeoutP.then(() => {
+          throw Error('Connection timed out');
+        }),
+      ]);
+      await client.destroy();
+      await server.stop();
+    });
+    test('keep alive prevents timeout on server', async () => {
+      const server = new QUICServer({
+        crypto: {
+          key,
+          ops: serverCryptoOps,
+        },
+        logger: logger.getChild(QUICServer.name),
+        config: {
+          key: tlsConfig.leafKeyPairPEM.privateKey,
+          cert: tlsConfig.leafCertPEM,
+          verifyPeer: false,
+          maxIdleTimeout: 100,
+          keepAliveIntervalTime: 50,
+        },
+      });
+      socketCleanMethods.extractSocket(server);
+      const serverConnectionP = firstValueFrom(server.connection$);
+      await server.start({
+        host: localhost,
+      });
+      const client = await QUICClient.createQUICClient({
+        host: '::ffff:127.0.0.1',
+        port: server.port,
+        localHost: '::',
+        crypto: {
+          ops: clientCryptoOps,
+        },
+        logger: logger.getChild(QUICClient.name),
+        config: {
+          verifyPeer: false,
+          maxIdleTimeout: 20000,
+        },
+      });
+      socketCleanMethods.extractSocket(client);
+      // Setting no keepalive should cause the connection to time out
+      // It has cleaned up due to timeout
+      const serverConnection = await serverConnectionP;
+      const serverTimeoutP = firstValueFrom(serverConnection.timedOut$);
+      // Connection would time out after 100ms if keep alive didn't work
+      await Promise.race([
+        sleep(300),
+        serverTimeoutP.then(() => {
+          throw Error('Connection timed out');
+        }),
+      ]);
+      await client.destroy();
+      await server.stop();
+    });
+    test('client keep alive prevents timeout on server', async () => {
+      const server = new QUICServer({
+        crypto: {
+          key,
+          ops: serverCryptoOps,
+        },
+        logger: logger.getChild(QUICServer.name),
+        config: {
+          key: tlsConfig.leafKeyPairPEM.privateKey,
+          cert: tlsConfig.leafCertPEM,
+          verifyPeer: false,
+          maxIdleTimeout: 100,
+        },
+      });
+      socketCleanMethods.extractSocket(server);
+      const serverConnectionP = firstValueFrom(server.connection$);
+      await server.start({
+        host: localhost,
+      });
+      const client = await QUICClient.createQUICClient({
+        host: '::ffff:127.0.0.1',
+        port: server.port,
+        localHost: '::',
+        crypto: {
+          ops: clientCryptoOps,
+        },
+        logger: logger.getChild(QUICClient.name),
+        config: {
+          verifyPeer: false,
+          maxIdleTimeout: 20000,
+          keepAliveIntervalTime: 50,
+        },
+      });
+      socketCleanMethods.extractSocket(client);
+      // Setting no keepalive should cause the connection to time out
+      // It has cleaned up due to timeout
+      const serverConnection = await serverConnectionP;
+      const serverTimeoutP = firstValueFrom(serverConnection.timedOut$);
+      // Connection would time out after 100ms if keep alive didn't work
+      await Promise.race([
+        sleep(300),
+        serverTimeoutP.then(() => {
+          throw Error('Connection timed out');
+        }),
+      ]);
+      await client.destroy();
+      await server.stop();
+    });
+    test('Keep alive does not prevent connection timeout', async () => {
+      const clientProm = QUICClient.createQUICClient({
+        host: '::ffff:127.0.0.1',
+        port: noTargetPort,
+        localHost: '::',
+        crypto: {
+          ops: clientCryptoOps,
+        },
+        logger: logger.getChild(QUICClient.name),
+        config: {
+          verifyPeer: false,
+          maxIdleTimeout: 100,
+          keepAliveIntervalTime: 50,
+        },
+      });
+      await expect(clientProm).rejects.toThrow(
+        errors.ErrorQUICConnectionIdleTimeout,
+      );
+    });
+  });
+
+  // Describe.each(types)('custom TLS verification with %s', (type) => {
   //   test('server succeeds custom verification', async () => {
   //     const tlsConfigs = await generateTLSConfig(type);
   //     const server = new QUICServer({
