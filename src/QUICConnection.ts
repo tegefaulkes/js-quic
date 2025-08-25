@@ -44,6 +44,9 @@ export enum Step {
   StateEnd = 13,
 }
 
+// TODO: A timedOut should count as an error condition and emit on error$.
+// TODO: We havea timeout$ and timedout$, this is really confusing.
+
 class QUICConnection {
   static connectionConnect({
     serverName,
@@ -486,7 +489,7 @@ class QUICConnection {
       this.peerError_ = value;
       this.peerError$.next(value);
       this.error$.next(
-        Error(`TMP IMP failed with peerError ${value.errorCode}`),
+        new errors.ErrorQUICConnectionPeer(undefined, { data: value }),
       );
     }
     return value;
@@ -501,7 +504,7 @@ class QUICConnection {
       this.localError_ = value;
       this.localError$.next(value);
       this.error$.next(
-        Error(`TMP IMP failed with localError ${value.errorCode}`),
+        new errors.ErrorQUICConnectionLocal(undefined, { data: value }),
       );
     }
     return value;
