@@ -33,8 +33,7 @@ describe(QUICClient.name, () => {
   };
   let socketCleanMethods: ReturnType<typeof testsUtils.socketCleanupFactory>;
 
-  const types: Array<KeyTypes> = ['RSA' /* 'ECDSA', 'Ed25519'*/];
-  // Const types: Array<KeyTypes> = ['RSA'];
+  const types: Array<KeyTypes> = ['RSA', 'ECDSA', 'Ed25519'];
   const defaultType = types[0];
   const clientCrypto: ClientCryptoOps = {
     randomBytes: testsUtils.randomBytes,
@@ -334,9 +333,7 @@ describe(QUICClient.name, () => {
         logger: logger.getChild(QUICClient.name),
         config: {
           verifyPeer: true,
-          verifyCallback: async () => {
-            return undefined;
-          },
+          verifyAllowFail: true,
         },
       });
       socketCleanMethods.extractSocket(client1);
@@ -381,9 +378,7 @@ describe(QUICClient.name, () => {
         logger: logger.getChild(QUICClient.name),
         config: {
           verifyPeer: true,
-          verifyCallback: async () => {
-            return undefined;
-          },
+          verifyAllowFail: true,
         },
       });
       socketCleanMethods.extractSocket(client1);
@@ -403,9 +398,7 @@ describe(QUICClient.name, () => {
         logger: logger.getChild(QUICClient.name),
         config: {
           verifyPeer: true,
-          verifyCallback: async () => {
-            return undefined;
-          },
+          verifyAllowFail: true,
         },
       });
       socketCleanMethods.extractSocket(client2);
@@ -658,7 +651,7 @@ describe(QUICClient.name, () => {
             verifyPeer: true,
           },
         }),
-      ).rejects.toThrow('TMP IMP local errored with code 304');
+      ).rejects.toThrow(errors.ErrorQUICConnectionLocalTLS);
       await server.stop();
     });
   });
@@ -1626,5 +1619,100 @@ describe(QUICClient.name, () => {
     await Promise.all(clients.map((client) => client.destroy({ force: true })));
     await sharedSocket.stop({ force: true });
     await server.stop({ force: true });
+  });
+
+  describe.each(types)('TLS failures with %s certs', (type) => {
+    test('client rejects servers TLS certificates due to wrong CA', async () => {
+      const tlsConfig1 = await testsUtils.generateTLSConfig(type);
+      const tlsConfig2 = await testsUtils.generateTLSConfig(type);
+      const server = new QUICServer({
+        crypto: {
+          key,
+          ops: serverCryptoOps,
+        },
+        logger: logger.getChild(QUICServer.name),
+        config: {
+          key: tlsConfig1.leafKeyPairPEM.privateKey,
+          cert: tlsConfig1.leafCertPEM,
+        },
+      });
+      socketCleanMethods.extractSocket(server);
+      await server.start({
+        host: localhost,
+      });
+      const serverConnectionP = firstValueFrom(server.connection$);
+      const client1p = QUICClient.createQUICClient({
+        host: localhost,
+        port: server.port,
+        localHost: localhost,
+        crypto: {
+          ops: clientCryptoOps,
+        },
+        logger: logger.getChild(QUICClient.name),
+        config: {
+          verifyPeer: true,
+          ca: tlsConfig2.caCertPEM,
+        },
+      });
+      const serverConnection = await serverConnectionP;
+      expect(await firstValueFrom(serverConnection.error$)).toBeInstanceOf(
+        errors.ErrorQUICConnectionPeerTLS,
+      );
+      await expect(client1p).rejects.toThrow(
+        errors.ErrorQUICConnectionLocalTLS,
+      );
+
+      await server.stop();
+    });
+    test('server rejects clients TLS certificates due to wrong CA', async () => {
+      const tlsConfig1 = await testsUtils.generateTLSConfig(type);
+      const tlsConfig2 = await testsUtils.generateTLSConfig(type);
+      const server = new QUICServer({
+        crypto: {
+          key,
+          ops: serverCryptoOps,
+        },
+        logger: logger.getChild(QUICServer.name),
+        config: {
+          key: tlsConfig1.leafKeyPairPEM.privateKey,
+          cert: tlsConfig1.leafCertPEM,
+          verifyPeer: true,
+        },
+      });
+      socketCleanMethods.extractSocket(server);
+      const serverConnectionP = firstValueFrom(server.connection$);
+      await server.start({
+        host: localhost,
+      });
+      // When the server rejects the client, it happens after establishment.
+      // So the client will still connect but then error due to the TLS.
+      const client1 = await QUICClient.createQUICClient({
+        host: localhost,
+        port: server.port,
+        localHost: localhost,
+        crypto: {
+          ops: clientCryptoOps,
+        },
+        logger: logger.getChild(QUICClient.name),
+        config: {
+          key: tlsConfig2.leafKeyPairPEM.privateKey,
+          cert: tlsConfig2.leafCertPEM,
+          verifyPeer: false,
+        },
+      });
+      socketCleanMethods.extractSocket(client1);
+      const serverConnection = await serverConnectionP;
+      expect(await firstValueFrom(serverConnection.error$)).toBeInstanceOf(
+        errors.ErrorQUICConnectionLocalTLS,
+      );
+      expect(await firstValueFrom(client1.connection.error$)).toBeInstanceOf(
+        errors.ErrorQUICConnectionPeerTLS,
+      );
+      await firstValueFrom(client1.connection.closed$);
+      await firstValueFrom(serverConnection.closed$);
+
+      await client1.destroy({ force: true });
+      await server.stop({ force: true });
+    });
   });
 });

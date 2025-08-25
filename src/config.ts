@@ -44,6 +44,7 @@ const minIdleTimeout = Infinity;
 const clientDefault: QUICConfig = {
   sigalgs,
   verifyPeer: true,
+  verifyAllowFail: false,
   grease: true,
   keepAliveIntervalTime: undefined,
   maxIdleTimeout: 0,
@@ -67,6 +68,7 @@ const clientDefault: QUICConfig = {
 const serverDefault: QUICConfig = {
   sigalgs,
   verifyPeer: false,
+  verifyAllowFail: false,
   grease: true,
   keepAliveIntervalTime: undefined,
   maxIdleTimeout: 0,
@@ -132,7 +134,7 @@ function buildQuicheConfig(config: QUICConfig): QuicheConfig {
   try {
     quicheConfig = quiche.Config.withBoringSslCtx(
       config.verifyPeer,
-      config.verifyCallback != null,
+      config.verifyAllowFail,
       caPEMBuffer,
       keyPEMBuffers,
       certChainPEMBuffers,

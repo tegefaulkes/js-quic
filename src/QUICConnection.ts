@@ -13,7 +13,7 @@ import type {
   StreamReasonToCode,
 } from './types.js';
 import { firstValueFrom, ReplaySubject, Subject } from 'rxjs';
-import { CryptoError, quiche, Shutdown } from './native/index.js';
+import { quiche, Shutdown } from './native/index.js';
 import {
   ConnectionType,
   CLIENT_BIDI_ID,
@@ -188,7 +188,7 @@ class QUICConnection {
     );
   }
 
-  public readonly error$: Subject<Error> = new Subject();
+  public readonly error$: ReplaySubject<Error> = new ReplaySubject(1);
   // A send event must be emitted after the following
   //  - when a recv is processed
   //  - After a timeout event when `onTimeout()` is called
@@ -326,19 +326,8 @@ class QUICConnection {
     try {
       this.connection.recv(data, recvInfo);
     } catch (e) {
-      this.logger.warn('failed here');
-      if (e.message === 'TlsFail') {
-        // TODO: error out TLS observable
-        const error = this.localError;
-        if (error == null) utils.never('local error information as missing');
-        const message = `TLS verification failed with ${
-          CryptoError[error.errorCode]
-        }(${error.errorCode})`;
-        // TODO: make a proper TLS fail error
-        this.error$.next(Error(`TMP IMP ` + message));
-      } else {
-        this.error$.next(Error(`TMP IMP Errored from ${e.message}`));
-      }
+      this.logger.warn(`failed here with ${e.message}`);
+      // Catch and ignore the error. Error handling will be done when the state is checked later
     }
     this.recvHandled$.next();
     this.processStreams();
@@ -488,9 +477,15 @@ class QUICConnection {
     if (this.peerError_ == null && value != null) {
       this.peerError_ = value;
       this.peerError$.next(value);
-      this.error$.next(
-        new errors.ErrorQUICConnectionPeer(undefined, { data: value }),
-      );
+      if (utils.isCryptoErrorCode(value.errorCode)) {
+        this.error$.next(
+          new errors.ErrorQUICConnectionPeerTLS(undefined, { data: value }),
+        );
+      } else {
+        this.error$.next(
+          new errors.ErrorQUICConnectionPeer(undefined, { data: value }),
+        );
+      }
     }
     return value;
   }
@@ -503,9 +498,15 @@ class QUICConnection {
     if (this.localError_ == null && value != null) {
       this.localError_ = value;
       this.localError$.next(value);
-      this.error$.next(
-        new errors.ErrorQUICConnectionLocal(undefined, { data: value }),
-      );
+      if (utils.isCryptoErrorCode(value.errorCode)) {
+        this.error$.next(
+          new errors.ErrorQUICConnectionLocalTLS(undefined, { data: value }),
+        );
+      } else {
+        this.error$.next(
+          new errors.ErrorQUICConnectionLocal(undefined, { data: value }),
+        );
+      }
     }
     return value;
   }

@@ -8,8 +8,7 @@ import type {
   StreamCodeToReason,
   StreamReasonToCode,
 } from './types.js';
-import type { Config } from './native/types.js';
-import type { ConnectionErrorCode } from './native/types.js';
+import type { ConnectionErrorCode, Config } from './native/types.js';
 import type { Observable } from 'rxjs';
 import Logger from '@matrixai/logger';
 import { running } from '@matrixai/async-init';
@@ -252,14 +251,26 @@ class QUICClient {
         throw new errors.ErrorQUICConnectionIdleTimeout();
       }
       if (connection.peerError !== null) {
-        throw Error(
-          `TMP IMP peer errored with code ${connection.peerError.errorCode}`,
-        );
+        const errorDetails = connection.peerError;
+        if (utils.isCryptoErrorCode(errorDetails.errorCode)) {
+          throw new errors.ErrorQUICConnectionPeerTLS(undefined, {
+            data: connection.peerError,
+          });
+        }
+        throw new errors.ErrorQUICConnectionPeer(undefined, {
+          data: connection.peerError,
+        });
       }
       if (connection.localError !== null) {
-        throw Error(
-          `TMP IMP local errored with code ${connection.localError.errorCode}`,
-        );
+        const errorDetails = connection.localError;
+        if (utils.isCryptoErrorCode(errorDetails.errorCode)) {
+          throw new errors.ErrorQUICConnectionLocalTLS(undefined, {
+            data: connection.localError,
+          });
+        }
+        throw new errors.ErrorQUICConnectionLocal(undefined, {
+          data: connection.localError,
+        });
       }
       if (aborted) {
         const connectionClosedP = firstValueFrom(connection.closed$, {

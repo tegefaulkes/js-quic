@@ -163,12 +163,10 @@ type QUICConfig = {
   verifyPeer: boolean;
 
   /**
-   * Custom TLS verification callback.
-   * It is expected that the callback will throw an error if the verification
-   * fails.
-   * Will be ignored if `verifyPeer` is false.
+   * Will ignore verification failures.
+   * Will allow the connection to establish with an invalid TLS certificate.
    */
-  verifyCallback?: TLSVerifyCallback;
+  verifyAllowFail: boolean;
 
   /**
    * Enables the logging of secret keys to a file path.

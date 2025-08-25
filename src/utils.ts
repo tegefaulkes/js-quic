@@ -573,6 +573,14 @@ function setMaxListeners(
   events.setMaxListeners(limit, target);
 }
 
+/**
+ *  Checks if the error code is in the crypto error range.
+ *  This includes all codes in the 0x100 to 0x1FF range.
+ */
+function isCryptoErrorCode(code: number): boolean {
+  return (0x100 & code) > 0;
+}
+
 export {
   textEncoder,
   textDecoder,
@@ -613,4 +621,5 @@ export {
   isStreamStopped,
   isStreamReset,
   setMaxListeners,
+  isCryptoErrorCode,
 };
