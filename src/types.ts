@@ -1,5 +1,4 @@
-import type QUICStream from './QUICStream.js';
-import type { CryptoError } from './native/types.js';
+import type { CryptoError, QuicheTimeInstant } from './native/types.js';
 
 type POJO = { [key: string]: any };
 
@@ -164,12 +163,10 @@ type QUICConfig = {
   verifyPeer: boolean;
 
   /**
-   * Custom TLS verification callback.
-   * It is expected that the callback will throw an error if the verification
-   * fails.
-   * Will be ignored if `verifyPeer` is false.
+   * Will ignore verification failures.
+   * Will allow the connection to establish with an invalid TLS certificate.
    */
-  verifyCallback?: TLSVerifyCallback;
+  verifyAllowFail: boolean;
 
   /**
    * Enables the logging of secret keys to a file path.
@@ -322,6 +319,11 @@ type QUICServerConfigInput = Partial<QUICConfig> & {
   cert: string | Array<string> | Uint8Array | Array<Uint8Array>;
 };
 
+enum ConnectionType {
+  CLIENT = 0,
+  SERVER = 1,
+}
+
 type ConnectionId = Opaque<'ConnectionId', Buffer>;
 
 type ConnectionIdString = Opaque<'ConnectionIdString', string>;
@@ -336,7 +338,7 @@ type ConnectionMetadata = {
   remoteCertsChain: Array<Uint8Array>;
 };
 
-type StreamId = Opaque<'StreamId', number>;
+type StreamId = number;
 
 /**
  * Maps reason (most likely an exception) to a stream code.
@@ -349,7 +351,34 @@ type StreamReasonToCode = (type: 'read' | 'write', reason?: any) => number;
  */
 type StreamCodeToReason = (type: 'read' | 'write', code: number) => any;
 
-type QUICStreamMap = Map<StreamId, QUICStream>;
+type SendData = {
+  data: Buffer;
+  host: string;
+  port: number;
+  at: QuicheTimeInstant;
+};
+
+/**
+ * ID offset for client-initiated bidirectional streams
+ */
+const CLIENT_BIDI_ID = 0b00;
+
+/**
+ * ID offset for server-initiated bidirectional streams
+ */
+const SERVER_BIDI_ID = 0b01;
+
+/**
+ * ID offset for client-initiated unidirectional streams
+ */
+const CLIENT_UNI_ID = 0b10;
+
+/**
+ * ID offset for server-initiated unidirectional streams
+ */
+const SERVER_UNI_ID = 0b11;
+
+export { CLIENT_BIDI_ID, SERVER_BIDI_ID, CLIENT_UNI_ID, SERVER_UNI_ID };
 
 export type {
   POJO,
@@ -377,5 +406,7 @@ export type {
   StreamId,
   StreamReasonToCode,
   StreamCodeToReason,
-  QUICStreamMap,
+  SendData,
 };
+
+export { ConnectionType };

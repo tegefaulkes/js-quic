@@ -535,13 +535,13 @@ function isStreamBidirectional(streamId: StreamId): boolean {
  * Note if the peer sends a corrupted `StreamStopped`, the `code` will be `NaN`
  * Furthermore it is limited to 16 digits the stringified maximum integer size of JS.
  */
-function isStreamStopped(e: Error): number | false {
+function isStreamStopped(e: Error): number | undefined {
   let match: RegExpMatchArray | null;
   if ((match = e.message.match(/StreamStopped\((\d{1,16})\)/)) != null) {
     const code = parseInt(match[1]);
     return code;
   } else {
-    return false;
+    return;
   }
 }
 
@@ -549,13 +549,13 @@ function isStreamStopped(e: Error): number | false {
  * Note if the peer sends a corrupted `StreamReset`, the `code` will be `NaN`
  * Furthermore it is limited to 16 digits the stringified maximum integer size of JS.
  */
-function isStreamReset(e: Error): number | false {
+function isStreamReset(e: Error): number | undefined {
   let match: RegExpMatchArray | null;
   if ((match = e.message.match(/StreamReset\((\d{1,16})\)/)) != null) {
     const code = parseInt(match[1]);
     return code;
   } else {
-    return false;
+    return;
   }
 }
 
@@ -571,6 +571,14 @@ function setMaxListeners(
   limit: number = 100000,
 ) {
   events.setMaxListeners(limit, target);
+}
+
+/**
+ *  Checks if the error code is in the crypto error range.
+ *  This includes all codes in the 0x100 to 0x1FF range.
+ */
+function isCryptoErrorCode(code: number): boolean {
+  return (0x100 & code) > 0;
 }
 
 export {
@@ -613,4 +621,5 @@ export {
   isStreamStopped,
   isStreamReset,
   setMaxListeners,
+  isCryptoErrorCode,
 };

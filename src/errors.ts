@@ -76,6 +76,10 @@ class ErrorQUICClientInternal<T> extends ErrorQUICClient<T> {
   static description = 'QUIC Client internal error';
 }
 
+class ErrorQUICClientAborted<T> extends ErrorQUICClient<T> {
+  static description = 'QUIC Client action was aborted';
+}
+
 class ErrorQUICServer<T> extends ErrorQUIC<T> {
   static description = 'QUIC Server error';
 }
@@ -211,12 +215,16 @@ class ErrorQUICConnectionInternal<T> extends ErrorQUICConnection<T> {
   static description = 'QUIC Connection internal error';
 }
 
+class ErrorQUICConnectionDraining<T> extends ErrorQUICConnection<T> {
+  static description = 'QUIC connection is draining streams';
+}
+
 class ErrorQUICStream<T> extends ErrorQUIC<T> {
   static description = 'QUIC Stream error';
 }
 
-class ErrorQUICStreamDestroyed<T> extends ErrorQUICStream<T> {
-  static description = 'QUIC Stream is destroyed';
+class ErrorQUICStreamKilled<T> extends ErrorQUICStream<T> {
+  static description = 'QUIC Stream is killed';
 }
 
 class ErrorQUICStreamLocalRead<T> extends ErrorQUICStream<T> {
@@ -295,6 +303,10 @@ class ErrorQUICStreamLimit<T> extends ErrorQUICStream<T> {
   static description = 'QUIC Stream limit has been reached';
 }
 
+class ErrorQUICStreamUnidirectional<T> extends ErrorQUICStream<T> {
+  static description = 'QUIC stream is a unidirectional stream';
+}
+
 export {
   ErrorQUIC,
   ErrorQUICUndefinedBehaviour,
@@ -314,6 +326,7 @@ export {
   ErrorQUICClientInvalidArgument,
   ErrorQUICClientInvalidHost,
   ErrorQUICClientInternal,
+  ErrorQUICClientAborted,
   ErrorQUICServer,
   ErrorQUICServerNotRunning,
   ErrorQUICServerSocketNotRunning,
@@ -333,12 +346,14 @@ export {
   ErrorQUICConnectionPeerTLS,
   ErrorQUICConnectionIdleTimeout,
   ErrorQUICConnectionInternal,
+  ErrorQUICConnectionDraining,
   ErrorQUICStream,
-  ErrorQUICStreamDestroyed,
+  ErrorQUICStreamKilled,
   ErrorQUICStreamLocalRead,
   ErrorQUICStreamLocalWrite,
   ErrorQUICStreamPeerRead,
   ErrorQUICStreamPeerWrite,
   ErrorQUICStreamInternal,
   ErrorQUICStreamLimit,
+  ErrorQUICStreamUnidirectional,
 };
