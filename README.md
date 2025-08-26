@@ -235,7 +235,7 @@ enviroment, you need to install the following.
    - cmake
    - gcc
    - clang
-3. Switch the rust version to `1.77.1`
+3. Switch the rust version to `1.82`
 4. Now you should be able to install, build and run tests.
 
 ## License
