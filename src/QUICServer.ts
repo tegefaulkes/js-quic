@@ -422,7 +422,6 @@ class QUICServer {
    *
    * @internal
    */
-  // TODO: make sync
   @startStop.ready(new errors.ErrorQUICServerNotRunning())
   public async acceptConnection(
     remoteInfo: RemoteInfo,

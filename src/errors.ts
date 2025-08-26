@@ -76,6 +76,10 @@ class ErrorQUICClientInternal<T> extends ErrorQUICClient<T> {
   static description = 'QUIC Client internal error';
 }
 
+class ErrorQUICClientAborted<T> extends ErrorQUICClient<T> {
+  static description = 'QUIC Client action was aborted';
+}
+
 class ErrorQUICServer<T> extends ErrorQUIC<T> {
   static description = 'QUIC Server error';
 }
@@ -322,6 +326,7 @@ export {
   ErrorQUICClientInvalidArgument,
   ErrorQUICClientInvalidHost,
   ErrorQUICClientInternal,
+  ErrorQUICClientAborted,
   ErrorQUICServer,
   ErrorQUICServerNotRunning,
   ErrorQUICServerSocketNotRunning,

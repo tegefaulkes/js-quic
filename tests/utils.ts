@@ -667,90 +667,6 @@ function socketCleanupFactory() {
   };
 }
 
-type Messages = Array<Buffer>;
-
-type StreamData = {
-  messages: Messages;
-  startDelay: number;
-  endDelay: number;
-  delays: Array<number>;
-};
-
-/**
- * This is used to have a stream run concurrently in the background.
- * Will resolve once stream has completed.
- * This will send the data provided with delays provided.
- * Will consume stream with provided delays between reads.
- */
-const handleStreamProm = async (stream: QUICStream, streamData: StreamData) => {
-  const messages = streamData.messages;
-  const delays = streamData.delays;
-  const writeProm = (async () => {
-    // Write data
-    let count = 0;
-    const writer = stream.writable.getWriter();
-    for (const message of messages) {
-      await writer.write(message);
-      await sleep(delays[count % delays.length]);
-      count += 1;
-    }
-    await sleep(streamData.endDelay);
-    await writer.close();
-  })();
-  const readProm = (async () => {
-    // Consume readable
-    let count = 0;
-    for await (const _ of stream.readable) {
-      // Do nothing with delay,
-      await sleep(delays[count % delays.length]);
-      count += 1;
-    }
-  })();
-  try {
-    await Promise.all([writeProm, readProm]);
-  } finally {
-    await stream.destroy().catch(() => {});
-    // @ts-ignore: kidnap logger
-    const streamLogger = stream.logger;
-    streamLogger.info(
-      `stream result ${JSON.stringify(
-        await Promise.allSettled([readProm, writeProm]),
-      )}`,
-    );
-  }
-};
-
-/**
- * When the `conn.timeout()` returns `0`, it is still a valid timeout.
- * Only when it returns `null`, is the timeout fully exhausted.
- * This should only be called after `conn.onTimeout()` is triggered.
- * This is useful for tests that need to exhaust the timeout.
- */
-async function waitForTimeoutNull(conn: Connection): Promise<void> {
-  while (true) {
-    const timeout = conn.timeout();
-    if (timeout == null) return;
-    await sleep(timeout + 1);
-    conn.onTimeout();
-  }
-}
-
-/**
- * Creates a formatted string listing the connection state.
- */
-function connStats(conn: Connection, label: string) {
-  return `
-----${label}----
-established: ${conn.isEstablished()},
-draining: ${conn.isDraining()},
-closed: ${conn.isClosed()},
-resumed: ${conn.isResumed()},
-earlyData: ${conn.isInEarlyData()},
-peerCerts: ${conn.peerCertChain() !== null ? 'Avaliable' : 'Missing'},
-timeout: ${conn.timeout()},
-`;
-}
-
 type KeyTypes = 'RSA' | 'ECDSA' | 'Ed25519';
 type TLSConfigs = {
   leafKeyPair: { publicKey: JsonWebKey; privateKey: JsonWebKey };
@@ -867,11 +783,8 @@ export {
   bufferWrap,
   bufferArb,
   socketCleanupFactory,
-  handleStreamProm,
-  waitForTimeoutNull,
-  connStats,
   generateTLSConfig,
   createReasonConverters,
 };
 
-export type { Messages, StreamData, KeyTypes, TLSConfigs };
+export type { KeyTypes, TLSConfigs };

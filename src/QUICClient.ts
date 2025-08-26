@@ -22,7 +22,6 @@ import * as utils from './utils.js';
 import * as events from './events.js';
 import * as errors from './errors.js';
 
-// FIXME: fixme I need to properly clean up events
 // FIXME: I need to trigger destroy if the underlying connection ends.
 
 interface QUICClient extends createDestroy.CreateDestroy {}
@@ -217,7 +216,6 @@ class QUICClient {
       client.handleEventQUICSocketStopped,
       { once: true },
     );
-    // TODO: handle events here
     client.addEventListener(
       events.EventQUICClientError.name,
       client.handleEventQUICClientError,
@@ -282,10 +280,12 @@ class QUICClient {
           reason: Buffer.from('Connection aborted'),
         });
         await connectionClosedP;
-        throw Error('TMP IMP connection aborted');
+        throw new errors.ErrorQUICClientAborted();
       }
     } catch (e) {
-      if (!connection.closed) throw Error('YO MUST BE CLOSED HERE!');
+      if (!connection.closed) {
+        utils.never('The connection should be closed here');
+      }
       if (!isSocketShared) {
         await socket.stop({ force: true });
       }

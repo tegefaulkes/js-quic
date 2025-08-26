@@ -276,7 +276,7 @@ describe(QUICClient.name, () => {
           },
           timer(100),
         ),
-      ).rejects.toThrow('TMP IMP connection aborted');
+      ).rejects.toThrow(errors.ErrorQUICClientAborted);
     });
     test('client times out with abort while starting', async () => {
       // QUICClient repeatedly dials until the connection timeout
@@ -300,7 +300,7 @@ describe(QUICClient.name, () => {
       );
       await sleep(100);
       abort.next();
-      await expect(clientProm).rejects.toThrow('TMP IMP connection aborted');
+      await expect(clientProm).rejects.toThrow(errors.ErrorQUICClientAborted);
     });
   });
 
@@ -656,20 +656,8 @@ describe(QUICClient.name, () => {
     });
   });
 
-  // FIXME: this needs to be fixed up. Currently not actually handling the error properly when creating the client.
+  // Todo: implement proper feedback for failed sends on a connection
   test.skip('invalid arguments causes `createQUICClient` to fail', async () => {
-    await QUICClient.createQUICClient({
-      host: '123.123.123.123', // Invalid ip when bound to loopback
-      port: 55555,
-      localHost: localhost,
-      crypto: {
-        ops: clientCrypto,
-      },
-      config: {
-        verifyPeer: false,
-      },
-      logger: logger.getChild(QUICClient.name),
-    });
     await expect(
       QUICClient.createQUICClient({
         host: '123.123.123.123', // Invalid ip when bound to loopback

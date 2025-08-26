@@ -10,6 +10,7 @@ import type { Header } from './native/types.js';
 import type { RemoteInfo } from 'dgram';
 import type { Observable } from 'rxjs';
 import dgram from 'dgram';
+import { merge } from 'rxjs';
 import { firstValueFrom } from 'rxjs';
 import Logger from '@matrixai/logger';
 import { startStop } from '@matrixai/async-init';
@@ -239,15 +240,23 @@ class QUICSocket {
     this.socketClose = utils.promisify(this.socket.close).bind(this.socket);
     this.socketSend = utils.promisify(this.socket.send).bind(this.socket);
     // FIXME: needs a cleanup abort
-    const socketErrorP = firstValueFrom(this.socketError$, {
-      defaultValue: undefined,
-    });
+    const cleanupSubject$ = new Subject<void>();
+    const socketErrorP = firstValueFrom(
+      merge(this.socketError$, cleanupSubject$),
+      {
+        defaultValue: undefined,
+      },
+    );
     // This resolves DNS via `getaddrinfo` under the hood.
     // It which respects the hosts file.
     // This makes it equivalent to `dns.lookup`.
     const socketBindP = this.socketBind(port_, host_);
-    const raceResult = await Promise.race([socketBindP, socketErrorP]);
-    // FIXME: clean up the socket error prom
+    const raceResult = await Promise.race([socketBindP, socketErrorP]).finally(
+      async () => {
+        cleanupSubject$.next();
+        await socketErrorP;
+      },
+    );
     // Possible binding failure due to EINVAL or ENOTFOUND.
     // EINVAL due to using IPv4 address where udp6 is specified.
     // ENOTFOUND when the hostname doesn't resolve, or doesn't resolve to IPv6 if udp6 is specified
@@ -332,10 +341,6 @@ class QUICSocket {
         // state is optional. We can respond with `STATELESS_RESET`
         // but it's not necessary, and ignoring is simpler
         // https://www.rfc-editor.org/rfc/rfc9000.html#stateless-reset
-        // FIXME remove
-        // this.logger.warn(
-        //   `recv ${connection.connectionIdShared}@${remoteInfo_.host}:${remoteInfo_.port}->${data.byteLength}`,
-        // );
         connection.processRecv(data, remoteInfo_);
       } else {
         // If the server is not registered, we cannot attempt to create a new
@@ -395,7 +400,6 @@ class QUICSocket {
       }
     });
     this.quicSocketClose$.subscribe(async () => {
-      // FIXME: feels odd to socketClose() here
       await this.socketClose();
       this._closed = true;
       this.resolveClosedP();
@@ -430,7 +434,6 @@ class QUICSocket {
     this.socketSend$.complete();
     // Wait for all sends to settle
     await Promise.all(this.sendQueue);
-    // FIXME: very weird
     if (!this._closed) {
       this.quicSocketClose$.next();
     }
@@ -462,7 +465,9 @@ class QUICSocket {
           `!<<<<< socketSend$ sent ${data.byteLength} bytes to ${host}:${port}`,
         );
       }
-      void this.send_(data, port, host);
+      void this.send_(data, port, host).catch((e) => {
+        this.logger.error(`failed send to ${host}:${port} due to ${e.message}`);
+      });
     });
     this.socketSendReady$ = this.socketSend$
       .pipe(map(() => undefined))
@@ -494,7 +499,6 @@ class QUICSocket {
    * mean that this `QUICSocket` is an error state. It could be the caller's
    * fault.
    */
-  // FIXME: this is way too complex for a low level send.
   public async send(
     msg: string | Uint8Array | ReadonlyArray<any>,
     port: number,

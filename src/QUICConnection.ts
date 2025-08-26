@@ -44,9 +44,6 @@ export enum Step {
   StateEnd = 13,
 }
 
-// TODO: A timedOut should count as an error condition and emit on error$.
-// TODO: We havea timeout$ and timedout$, this is really confusing.
-
 class QUICConnection {
   static connectionConnect({
     serverName,
@@ -344,6 +341,7 @@ class QUICConnection {
         const sendBuffer = Buffer.allocUnsafe(
           this.config.maxSendUdpPayloadSize,
         );
+        // This could error out under some conditions. For now we're treating it as a fatal error until it becomes a problem
         const result = this.connection.send(sendBuffer);
         if (result == null) break;
         const [sendLength, sendInfo] = result;
@@ -354,10 +352,6 @@ class QUICConnection {
           at: sendInfo.at,
         });
       }
-    } catch (e) {
-      // TODO: dispatch connection error
-      this.logger.warn(`failed to process send with ${e.message}`);
-      throw e;
     } finally {
       this.checkState();
     }
@@ -366,7 +360,7 @@ class QUICConnection {
 
   protected checkState(): void {
     this.step$.next(Step.StateBegin);
-    this.checkTimeout();
+    this.CheckTickTimer();
     void this.isEstablished;
     void this.isResumed;
     void this.isInEarlyData;
@@ -380,23 +374,29 @@ class QUICConnection {
     this.step$.next(Step.StateEnd);
   }
 
-  protected timeoutTimer: NodeJS.Timeout | undefined;
-  public readonly timeout$: Subject<void> = new Subject();
-  protected handleTimeout = () => {
+  /**
+   * Timer for the tick timeout
+   */
+  protected tickTimer: NodeJS.Timeout | undefined;
+  /**
+   * A tick event is emitted when a time-based state change occurs.
+   */
+  public readonly tick$: Subject<void> = new Subject();
+  protected handleTick = () => {
     this.connection.onTimeout();
-    this.timeout$.next();
+    this.tick$.next();
     this.processSend();
     this.checkState();
-    this.checkTimeout();
+    this.CheckTickTimer();
   };
-  protected checkTimeout() {
+  protected CheckTickTimer() {
     const timeoutDelay = this.connection.timeout();
-    clearTimeout(this.timeoutTimer);
-    delete this.timeoutTimer;
+    clearTimeout(this.tickTimer);
+    delete this.tickTimer;
     if (timeoutDelay == null) {
       return;
     }
-    this.timeoutTimer = setTimeout(this.handleTimeout, timeoutDelay + 1);
+    this.tickTimer = setTimeout(this.handleTick, timeoutDelay + 1);
   }
 
   protected isEstablished_ = false;
@@ -466,6 +466,7 @@ class QUICConnection {
     const updated = value !== this.isTimedOut_;
     this.isTimedOut_ = value;
     if (updated) this.timedOut$.next();
+    // This.error$.next(new errors.ErrorQUICConnectionIdleTimeout());
     return value;
   }
 
