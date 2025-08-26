@@ -358,9 +358,24 @@ type SendData = {
   at: QuicheTimeInstant;
 };
 
+/**
+ * ID offset for client-initiated bidirectional streams
+ */
 const CLIENT_BIDI_ID = 0b00;
+
+/**
+ * ID offset for server-initiated bidirectional streams
+ */
 const SERVER_BIDI_ID = 0b01;
+
+/**
+ * ID offset for client-initiated unidirectional streams
+ */
 const CLIENT_UNI_ID = 0b10;
+
+/**
+ * ID offset for server-initiated unidirectional streams
+ */
 const SERVER_UNI_ID = 0b11;
 
 export { CLIENT_BIDI_ID, SERVER_BIDI_ID, CLIENT_UNI_ID, SERVER_UNI_ID };

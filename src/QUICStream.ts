@@ -14,6 +14,10 @@ import * as utils from './utils.js';
 import * as errors from './errors.js';
 import { Shutdown } from './native/index.js';
 
+/**
+ * ENUM for mapping stream state events to simple codes.
+ * This is used to avoid too much processing during low level stream events.
+ */
 export enum StreamState {
   WritableStart = 0,
   WritableWriteStart = 1,
@@ -36,15 +40,53 @@ export enum StreamState {
   Killed = 18,
 }
 
-// The usual message data size from a single packet
+/**
+ * Chunk size allocated when reading data from the stream.
+ * This is sized to contain a single packet worth of data.
+ */
 const CHUNK_SIZE = 1307;
 
+/**
+ * QUICStream is a wrapper around the QUICConnection stream methods for tracking stream state and processing stream data.
+ * This functions as a ReadableWritableStreamPair with stream state, metadata and observable events included.
+ *
+ * Unidirection streams are initiated with either the readable or writable stream already errored out.
+ * Bidirectional streams are initiated with both streams working.
+ *
+ * QUICStreams exist as pairs, with the forward QUICStream existing on the initiating side and the reverse stream existing
+ * on the receiving side. This is separate from the client and server convention since all sides can initiate streams.
+ *
+ * The reverse stream is only created on the receiving side when data is sent. In the case that the forward writable
+ * stream is closed before sending data, then the receiving readable stream is created as already complete. The same happens
+ * when the stream is errored out before sending data.
+ *
+ * The QUICStream only completes once the readable and writable streams are complete. Completion can be a graceful
+ * finish of the streams or an error condition causing it to close. The readable stream will only gracefully end once
+ * all data has been read from it. Or in the case of it being already drained with a 0-len fin packet, it will close
+ * immediately. An error on the readable stream will cause all remaining buffered data to be dropped.
+ */
 class QUICStream {
+  /**
+   * The writable side of the stream. If this is the initiated `QUICStream` then this is considered the forward side of the stream.
+   */
   public readonly writable: WritableStream<Buffer>;
+  /**
+   * The readable side of the stream. If this is the initiated `QUICStream` then this is considered the reverse side of the stream.
+   */
   public readonly readable: ReadableStream<Buffer>;
+  /**
+   * Used to signal that there is readable stream data available to be read.
+   */
   public readonly readReady$: Subject<void> = new Subject();
+  /**
+   * Used to signal that the writable stream has capacity to write.
+   */
   public readonly writeReady$: Subject<void> = new Subject();
+  /**
+   * General debug observable that emits StreamState enum as events.
+   */
   public readonly streamEvents$: Subject<StreamState> = new Subject();
+
   protected writableAborted = false;
   protected readableCancelled = false;
   protected readableController: ReadableStreamController<Buffer>;
@@ -335,6 +377,13 @@ class QUICStream {
     return readableStream;
   }
 
+  /**
+   *
+   * @param id - The id assigned to the stream.
+   * @param connection - The connectio the stream belongs to.
+   * @param codeToReason - The codeToReason callback that maps codes into errors.
+   * @param reasonToCode - The ReasonToCode callback that maps errors into codes.
+   */
   constructor(
     public readonly id: number,
     public readonly connection: QUICConnection,
@@ -357,7 +406,15 @@ class QUICStream {
   }
 
   protected isFinished_ = false;
+  /**
+   * Emits when the underlying readable stream has finished.
+   */
   public readonly finished$: ReplaySubject<void> = new ReplaySubject(1);
+
+  /**
+   * Returns true if the readable stream has finished.
+   * This will only become true if all the stream data has been read from the underlying QUICConnection.
+   */
   public get isFinished(): boolean {
     if (
       !this.isFinished_ &&
@@ -372,53 +429,20 @@ class QUICStream {
 
   // Logic for stream completion
   protected _readableComplete: boolean = false;
+  /**
+   * Emits when the readable stream has fully completed, either via graceful finish or error.
+   */
   public readonly readableComplete$: ReplaySubject<void> = new ReplaySubject();
   protected _writableComplete: boolean = false;
+  /**
+   * Emits when the writable stream has fully completed, either via graceful finish or error.
+   */
   public readonly writableComplete$: ReplaySubject<void> = new ReplaySubject();
   protected _complete: boolean = false;
+  /**
+   * Emits when the QUICStream has fully completed, either via graceful finish or error.
+   */
   public readonly complete$: ReplaySubject<void> = new ReplaySubject();
-
-  get readableComplete() {
-    return this._readableComplete;
-  }
-  get writableComplete() {
-    return this._writableComplete;
-  }
-  get complete() {
-    return this._complete;
-  }
-
-  get sourceHost(): Host {
-    return this.connection.sourceHost;
-  }
-
-  get sourcePort(): Port {
-    return this.connection.sourcePort;
-  }
-
-  get host(): Host {
-    return this.connection.host;
-  }
-
-  get port(): Port {
-    return this.connection.port;
-  }
-
-  get remoteCertChain(): Array<Uint8Array> | undefined {
-    return this.connection.peerCertChain;
-  }
-
-  get isReadableComplete() {
-    return this._readableComplete;
-  }
-
-  get isWritableComplete() {
-    return this._writableComplete;
-  }
-
-  get isComplete() {
-    return this._complete;
-  }
 
   protected updateReadableComplete() {
     if (this._readableComplete) return;
@@ -442,6 +466,68 @@ class QUICStream {
     }
   }
 
+  /**
+   * Returns true if the readable stream has fully completed, either via graceful finish or error.
+   */
+  get isReadableComplete() {
+    return this._readableComplete;
+  }
+
+  /**
+   * Returns true if the writable stream has fully completed, either via graceful finish or error.
+   */
+  get isWritableComplete() {
+    return this._writableComplete;
+  }
+
+  /**
+   * Returns true if the QUICStream has fully completed, either via graceful finish or error.
+   */
+  get isComplete() {
+    return this._complete;
+  }
+
+  /**
+   * Returns the source host of the underlying connection.
+   */
+  get sourceHost(): Host {
+    return this.connection.sourceHost;
+  }
+
+  /**
+   * Returns the source port of the underlying connection.
+   */
+  get sourcePort(): Port {
+    return this.connection.sourcePort;
+  }
+
+  /**
+   * Returns the remote host of the underlying connection.
+   */
+  get host(): Host {
+    return this.connection.host;
+  }
+
+  /**
+   * Returns the remote port of the underlying connection.
+   */
+  get port(): Port {
+    return this.connection.port;
+  }
+
+  /**
+   * Returns the remote peer certificate chain in the DER format if available.
+   */
+  get remoteCertChain(): Array<Uint8Array> | undefined {
+    return this.connection.peerCertChain;
+  }
+
+  /**
+   * Kills the writable and readable streams if they are still open.
+   * The streams will be errored with the given reason. code will be generated with `reasonToCode` with the provided reason.
+   * The reason defaults to `ErrorQUICStreamKilled()`.
+   * @param reason - The reason for the stream to be killed.
+   */
   public kill(reason: Error = new errors.ErrorQUICStreamKilled()) {
     this.streamEvents$.next(StreamState.Killed);
     // Handle killing the writable stream
