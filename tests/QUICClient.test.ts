@@ -1155,8 +1155,8 @@ describe(QUICClient.name, () => {
       await sleep(100);
       // Server and client has cleaned up
 
-      expect(clientConnection.closed).toBeTrue();
-      expect(serverConnection.closed).toBeTrue();
+      expect(clientConnection.isClosed).toBeTrue();
+      expect(serverConnection.isClosed).toBeTrue();
 
       await client.destroy();
       await server.stop();
@@ -1201,8 +1201,8 @@ describe(QUICClient.name, () => {
       await firstValueFrom(serverConnection.timedOut$);
       await sleep(100);
       // Server and client has cleaned up
-      expect(clientConnection.closed).toBeTrue();
-      expect(serverConnection.closed).toBeTrue();
+      expect(clientConnection.isClosed).toBeTrue();
+      expect(serverConnection.isClosed).toBeTrue();
 
       await client.destroy();
       await server.stop();

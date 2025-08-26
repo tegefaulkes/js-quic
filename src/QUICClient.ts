@@ -283,7 +283,7 @@ class QUICClient {
         throw new errors.ErrorQUICClientAborted();
       }
     } catch (e) {
-      if (!connection.closed) {
+      if (!connection.isClosed) {
         utils.never('The connection should be closed here');
       }
       if (!isSocketShared) {

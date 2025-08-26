@@ -24,8 +24,6 @@ import * as events from './events.js';
 import * as errors from './errors.js';
 import QUICConnectionId from './QUICConnectionId.js';
 
-const LOG_PACKETS = false;
-
 type MessageData = {
   data: Buffer;
   remoteInfo: RemoteInfo;
@@ -239,7 +237,6 @@ class QUICSocket {
     this.socketBind = utils.promisify(this.socket.bind).bind(this.socket);
     this.socketClose = utils.promisify(this.socket.close).bind(this.socket);
     this.socketSend = utils.promisify(this.socket.send).bind(this.socket);
-    // FIXME: needs a cleanup abort
     const cleanupSubject$ = new Subject<void>();
     const socketErrorP = firstValueFrom(
       merge(this.socketError$, cleanupSubject$),
@@ -289,11 +286,6 @@ class QUICSocket {
       this._type = 'ipv6';
     }
     this.socketMessage$.subscribe(async ({ data, remoteInfo }) => {
-      if (LOG_PACKETS) {
-        this.logger.warn(
-          `!>>>>> Received ${data.byteLength} bytes from ${remoteInfo.address}:${remoteInfo.port}`,
-        );
-      }
       /**
        * Handles UDP socket message.
        *
@@ -460,11 +452,6 @@ class QUICSocket {
     this.socketMessage$ = new Subject();
     this.socketSend$ = new Subject();
     this.socketSend$.subscribe(({ data, host, port }) => {
-      if (LOG_PACKETS) {
-        this.logger.warn(
-          `!<<<<< socketSend$ sent ${data.byteLength} bytes to ${host}:${port}`,
-        );
-      }
       void this.send_(data, port, host).catch((e) => {
         this.logger.error(`failed send to ${host}:${port} due to ${e.message}`);
       });

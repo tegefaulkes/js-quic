@@ -27,7 +27,11 @@ import * as utils from './utils.js';
 import QUICConnectionId from './QUICConnectionId.js';
 import QUICStream from './QUICStream.js';
 
-export enum Step {
+/**
+ * ENUM for mapping connection processing steps to simple codes.
+ * This is used to avoid too much processing during low level connection events.
+ */
+export enum ConnectionStep {
   RecvBegin = 0,
   RecvEnd = 1,
   StreamsBegin = 2,
@@ -44,7 +48,26 @@ export enum Step {
   StateEnd = 13,
 }
 
+/**
+ * This wraps the underlying quiche connection state and provides an event based interface.
+ */
 class QUICConnection {
+  /**
+   * Creates a client initiated QUICConnection.
+   * @param serverName - client connections can use server name for
+   *                          verifying the server's certificate. however, if
+   *                          `config.verifyCallback` is set, this will have no
+   *                          effect.
+   * @param scid - source connection ID.
+   * @param config - QUIC config.
+   * @param sourceHost - source host for the connection.
+   * @param sourcePort - Source port for the connection.
+   * @param host - Target host for the connection.
+   * @param port - Target port for the connection.
+   * @param codeToReason - maps stream error reasons to stream error codes.
+   * @param reasonToCode - maps stream error codes to reasons.
+   * @param logger
+   */
   static connectionConnect({
     serverName,
     scid,
@@ -118,6 +141,19 @@ class QUICConnection {
     );
   }
 
+  /**
+   * Creates a server received QUICConnection.
+   * @param scid - source connection ID.
+   * @param dcid - destination connection ID.
+   * @param config - QUIC config.
+   * @param sourceHost - source host for the connection.
+   * @param sourcePort - Source port for the connection.
+   * @param host - Target host for the connection.
+   * @param port - Target port for the connection.
+   * @param codeToReason - maps stream error reasons to stream error codes.
+   * @param reasonToCode - maps stream error codes to reasons.
+   * @param logger
+   */
   static connectionAccept({
     scid,
     dcid,
@@ -185,14 +221,26 @@ class QUICConnection {
     );
   }
 
+  /**
+   * Emitts an Error when an Error has occurred.
+   */
   public readonly error$: ReplaySubject<Error> = new ReplaySubject(1);
   // A send event must be emitted after the following
   //  - when a recv is processed
   //  - After a timeout event when `onTimeout()` is called
   //  - When the application interacts with the streams
+  /**
+   * Emits data that needs to be sent.
+   */
   public readonly send$: Subject<SendData> = new Subject();
+  /**
+   * Emits when a recv is processed. Currently just used to process stream finish in certain conditions.
+   */
   public readonly recvHandled$: Subject<void> = new Subject();
-  public readonly step$: Subject<Step> = new Subject();
+  /**
+   * General debug observable that emits ConnectionStep enum as events.
+   */
+  public readonly connectionEvents$: Subject<ConnectionStep> = new Subject();
 
   /**
    * Chain of local certificates from leaf to root in DER format.
@@ -204,6 +252,9 @@ class QUICConnection {
    */
   protected caDERs: Array<Uint8Array> = [];
 
+  /**
+   * True when the QUICConnection is rejecting new connections.
+   */
   protected rejectStreams: boolean = false;
 
   /**
@@ -220,7 +271,6 @@ class QUICConnection {
    */
   protected keepAliveIntervalTimer?: NodeJS.Timeout;
 
-  // Sets everything up
   public constructor(
     public readonly type: ConnectionType,
     public readonly connection: Connection,
@@ -250,6 +300,7 @@ class QUICConnection {
         establishedSubscription.unsubscribe();
       });
     }
+    // Trigger ending stream if the connection closes
     this.closed$.subscribe(() => {
       clearTimeout(this.keepAliveIntervalTimer);
       if (this.isTimedOut_) {
@@ -271,16 +322,25 @@ class QUICConnection {
     );
   }
 
+  /**
+   * Local connection ID as a hex string.
+   */
   public get connectionId(): ConnectionIdString {
     const sourceId = this.connection.sourceId();
     return Buffer.from(sourceId).toString('hex') as ConnectionIdString;
   }
 
+  /**
+   * Peer connection ID as a hex string.
+   */
   public get connectionIdPeer(): ConnectionIdString {
     const destinationId = this.connection.destinationId();
     return Buffer.from(destinationId).toString('hex') as ConnectionIdString;
   }
 
+  /**
+   * Connection ID that is shared between the client and server as a hex string.
+   */
   public get connectionIdShared(): string {
     const sourceId = this.connectionId;
     const destinationId = this.connectionIdPeer;
@@ -301,15 +361,12 @@ class QUICConnection {
     return this.certDERs;
   }
 
-  public get closed() {
-    return this.connection.isClosed();
-  }
-
   /**
-   * This just shoves data into the underlying connection instance and triggers observable events
+   * Processes incoming packets.
+   * Once the packet has been processed, the streams are then processed and any outgoing packets are sent.
    */
   public processRecv(data: Uint8Array, remoteInfo: RemoteInfo) {
-    this.step$.next(Step.RecvBegin);
+    this.connectionEvents$.next(ConnectionStep.RecvBegin);
     const recvInfo: RecvInfo = {
       to: {
         host: this.sourceHost,
@@ -329,19 +386,22 @@ class QUICConnection {
     this.recvHandled$.next();
     this.processStreams();
     this.processSend();
-    this.step$.next(Step.RecvEnd);
+    this.connectionEvents$.next(ConnectionStep.RecvEnd);
   }
 
-  // This will extract send data from the connection and emit it on the `sendData$` subject
+  /**
+   * This will extract send data from the connection and emit it on the `sendData$` subject.
+   * Will check the connection state after data has been sent.
+   */
   public processSend(): void {
-    this.step$.next(Step.SendBegin);
+    this.connectionEvents$.next(ConnectionStep.SendBegin);
     try {
       if (this.connection.isDraining()) return;
       while (true) {
         const sendBuffer = Buffer.allocUnsafe(
           this.config.maxSendUdpPayloadSize,
         );
-        // This could error out under some conditions. For now we're treating it as a fatal error until it becomes a problem
+        // This could error out under some conditions. For now, we're treating it as a fatal error until it becomes a problem
         const result = this.connection.send(sendBuffer);
         if (result == null) break;
         const [sendLength, sendInfo] = result;
@@ -355,14 +415,16 @@ class QUICConnection {
     } finally {
       this.checkState();
     }
-    this.step$.next(Step.SendEnd);
+    this.connectionEvents$.next(ConnectionStep.SendEnd);
   }
 
+  /**
+   * Checks the state of the connection and emits events if necessary.
+   */
   protected checkState(): void {
-    this.step$.next(Step.StateBegin);
+    this.connectionEvents$.next(ConnectionStep.StateBegin);
     this.CheckTickTimer();
     void this.isEstablished;
-    void this.isResumed;
     void this.isInEarlyData;
     void this.isReadable;
     void this.isDraining;
@@ -371,7 +433,7 @@ class QUICConnection {
     void this.localError;
     void this.peerCertChain;
     void this.isClosed;
-    this.step$.next(Step.StateEnd);
+    this.connectionEvents$.next(ConnectionStep.StateEnd);
   }
 
   /**
@@ -400,7 +462,13 @@ class QUICConnection {
   }
 
   protected isEstablished_ = false;
+  /**
+   * Emits once the connection is established. Establishment is separate from TLS handshake completion.
+   */
   public readonly established$: ReplaySubject<void> = new ReplaySubject(1);
+  /**
+   * Returns true once the connection is established. Establishment is separate from TLS handshake completion.
+   */
   public get isEstablished() {
     const value = this.connection.isEstablished();
     const updated = value !== this.isEstablished_;
@@ -409,18 +477,14 @@ class QUICConnection {
     return value;
   }
 
-  protected isResumed_ = false;
-  public readonly isResumed$: Subject<boolean> = new Subject();
-  public get isResumed() {
-    const value = this.connection.isResumed();
-    const updated = value !== this.isResumed_;
-    this.isResumed_ = value;
-    if (updated) this.isResumed$.next(value);
-    return value;
-  }
-
   protected isInEarlyData_ = false;
-  public readonly isInEarlyData$: Subject<boolean> = new Subject();
+  /**
+   * Emits once the connection has reached the early data stage.
+   */
+  public readonly isInEarlyData$: ReplaySubject<boolean> = new ReplaySubject(1);
+  /**
+   * Returns true once the connection has reached the early data stage.
+   */
   public get isInEarlyData() {
     const value = this.connection.isInEarlyData();
     const updated = value !== this.isInEarlyData_;
@@ -429,18 +493,22 @@ class QUICConnection {
     return value;
   }
 
-  protected isReadable_ = false;
-  public readonly isReadable$: Subject<boolean> = new Subject();
   public get isReadable() {
-    const value = this.connection.isReadable();
-    const updated = value !== this.isReadable_;
-    this.isReadable_ = value;
-    if (updated) this.isReadable$.next(value);
-    return value;
+    return this.connection.isReadable();
   }
 
   protected isDraining_ = false;
+  /**
+   * Emits once the connection has reached the draining stage.
+   * Draining means the connection is awaiting acknowledgement of closing and will not be sending any new packets.
+   * The connection will close after an acknowledgement is received, or a timeout occurs.
+   */
   public readonly draining$: ReplaySubject<void> = new ReplaySubject(1);
+  /**
+   * Returns true once the connection has reached the draining stage.
+   * Draining means the connection is awaiting acknowledgement of closing and will not be sending any new packets.
+   * The connection will close after an acknowledgement is received, or a timeout occurs.
+   */
   public get isDraining() {
     const value = this.connection.isDraining();
     const updated = value !== this.isDraining_;
@@ -450,7 +518,15 @@ class QUICConnection {
   }
 
   protected isClosed_ = false;
+  /**
+   * Emits once the connection has closed.
+   * No more events will happen after this stage.
+   */
   public readonly closed$: ReplaySubject<void> = new ReplaySubject(1);
+  /**
+   * Returns true once the connection has closed.
+   * No more events will happen after this stage.
+   */
   public get isClosed() {
     const value = this.connection.isClosed();
     const updated = value !== this.isClosed_;
@@ -460,7 +536,13 @@ class QUICConnection {
   }
 
   protected isTimedOut_ = false;
+  /**
+   *  Emits if the connection closed due to timing out.
+   */
   public readonly timedOut$: ReplaySubject<void> = new ReplaySubject(1);
+  /**
+   *  Returns true if the connection closed due to timing out.
+   */
   public get isTimedOut() {
     const value = this.connection.isTimedOut();
     const updated = value !== this.isTimedOut_;
@@ -471,8 +553,14 @@ class QUICConnection {
   }
 
   protected peerError_: nativeTypes.ConnectionError | undefined = undefined;
+  /**
+   * Emits when a peer error occurs.
+   */
   public readonly peerError$: ReplaySubject<nativeTypes.ConnectionError> =
     new ReplaySubject(1);
+  /**
+   * Returns the peer error if the connection errored due to the peer.
+   */
   public get peerError() {
     const value = this.connection.peerError();
     if (this.peerError_ == null && value != null) {
@@ -492,8 +580,14 @@ class QUICConnection {
   }
 
   protected localError_: nativeTypes.ConnectionError | undefined = undefined;
+  /**
+   * Emits when a peer error occurs.
+   */
   public readonly localError$: ReplaySubject<nativeTypes.ConnectionError> =
     new ReplaySubject(1);
+  /**
+   * Returns the local error if the connection errored due to the local connection.
+   */
   public get localError() {
     const value = this.connection.localError();
     if (this.localError_ == null && value != null) {
@@ -513,9 +607,14 @@ class QUICConnection {
   }
 
   protected peerCertChain_: Array<Uint8Array> | undefined = undefined;
+  /**
+   * Emits the peer certificate chain in DER format once the peer has been verified.
+   */
   public readonly peerCertChain$: ReplaySubject<Array<Uint8Array>> =
     new ReplaySubject(1);
-  // Get peer cert chain in DER format
+  /**
+   * Returns the peer certificate chain in DER format once the peer has been verified.
+   */
   public get peerCertChain(): Array<Uint8Array> | undefined {
     const value = this.connection.peerCertChain();
     if (this.peerCertChain_ == null && value != null) {
@@ -525,10 +624,19 @@ class QUICConnection {
     return this.peerCertChain_;
   }
 
+  /**
+   * Returns the number of streams that are currently open.
+   */
   public get openStreams(): number {
     return this.streamMap.size;
   }
 
+  /**
+   * Signals the connection to reject new streams and wait for all existing streams to complete.
+   * If forced, it will trigger the streams to kill, otherwise it will just wait for their completion.
+   * @param force - Trigger all existing streams to kill themselves.
+   * @param reason - If provided the streams will be killed with this reason.
+   */
   public async endStreams(force: boolean, reason?: Error): Promise<void> {
     // Prevent new streams from being created
     this.rejectStreams = true;
@@ -536,13 +644,18 @@ class QUICConnection {
     const streams: Array<Promise<void>> = [];
     for (const [, stream] of this.streamMap) {
       streams.push(firstValueFrom(stream.complete$));
-
       // If forced, then we need to trigger the stream to end
       if (force) stream.kill(reason);
     }
     await Promise.all(streams);
   }
 
+  /**
+   * Used to kill the current connection. This will not trigger the existing streams to end until after the connection is closed.
+   * @param isApp - Whether the application initiated the connection closure.
+   * @param errorCode - The error code to use for the connection closure.
+   * @param reason - The reason message provided for the connection closure.
+   */
   public kill({
     isApp,
     errorCode,
@@ -555,8 +668,6 @@ class QUICConnection {
     this.connection.close(isApp, errorCode, reason);
     this.processSend();
   }
-
-  // Stream related methods
 
   /**
    * Client-initiated bidirectional stream starts at 0.
@@ -591,11 +702,13 @@ class QUICConnection {
 
   public stream$: Subject<QUICStream> = new Subject();
 
-  // Process streams by iterating over the readable and writable iterators
-  // and letting the streams know there is data.
+  /**
+   * Process streams by iterating over the readable and writable iterators and letting the streams know there is data.
+   * It will call each stream's `writeReady$` and `readReady$` subjects to signal if it is ready to read or write.
+   */
   public processStreams(): void {
-    this.step$.next(Step.StreamsBegin);
-    this.step$.next(Step.StreamsWritableBegin);
+    this.connectionEvents$.next(ConnectionStep.StreamsBegin);
+    this.connectionEvents$.next(ConnectionStep.StreamsWritableBegin);
     for (const streamId of this.connection.writable()) {
       let quicStream = this.streamMap.get(streamId);
       if (quicStream == null) {
@@ -614,10 +727,10 @@ class QUICConnection {
         this.stream$.next(quicStream);
       }
       quicStream.writeReady$.next();
-      this.step$.next(Step.StreamCreateWritable);
+      this.connectionEvents$.next(ConnectionStep.StreamCreateWritable);
     }
-    this.step$.next(Step.StreamsWritableEnd);
-    this.step$.next(Step.StreamsReadableBegin);
+    this.connectionEvents$.next(ConnectionStep.StreamsWritableEnd);
+    this.connectionEvents$.next(ConnectionStep.StreamsReadableBegin);
     for (const streamId of this.connection.readable()) {
       let quicStream = this.streamMap.get(streamId);
       if (quicStream == null) {
@@ -633,14 +746,17 @@ class QUICConnection {
         );
         this.setupQuicStream(quicStream);
         this.stream$.next(quicStream);
-        this.step$.next(Step.StreamCreateReadable);
+        this.connectionEvents$.next(ConnectionStep.StreamCreateReadable);
       }
       quicStream.readReady$.next();
     }
-    this.step$.next(Step.StreamsReadableEnd);
-    this.step$.next(Step.StreamsEnd);
+    this.connectionEvents$.next(ConnectionStep.StreamsReadableEnd);
+    this.connectionEvents$.next(ConnectionStep.StreamsEnd);
   }
 
+  /**
+   * An internal method to handle rejecting streams.
+   */
   protected rejectStream(streamId: StreamId): void {
     const error = new errors.ErrorQUICConnectionDraining();
     this.connection.streamShutdown(
@@ -693,6 +809,9 @@ class QUICConnection {
     return quicStream;
   }
 
+  /**
+   * Internal method for adding new streams to the stream map and hooking up clean-up logic.
+   */
   protected setupQuicStream(quicStream: QUICStream): void {
     this.streamMap.set(quicStream.id, quicStream);
     quicStream.complete$.subscribe(() => {
